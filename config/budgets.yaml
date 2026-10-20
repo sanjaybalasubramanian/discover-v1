@@ -1,0 +1,45 @@
+daily_limits:
+  serper_queries: 60
+  serpapi_queries: 3
+  searchapi_queries: 3
+  firecrawl_credits: 40
+  abstract_validations: 60
+  gemini_prompts: 50
+
+warn_at_percentage: 80
+
+free_tier_limits:
+  vercel:
+    bandwidth_gb: 100
+    functions_per_day: 100
+  gmail_api:
+    emails_per_day: 100
+    warn_at: 80
+  duckduckgo:
+    unlimited: true
+  serper:
+    monthly: 2500
+  firecrawl:
+    monthly: 500
+  abstract:
+    monthly: 100
+  github_actions:
+    minutes_monthly: 2000
+
+cache_ttl:
+  search_results_hours: 24
+  page_fetch_hours: 168  # 7 days
+  company_domain_days: 30
+
+provider_order:
+  search:
+    - duckduckgo
+    - serper
+    - serpapi
+    - searchapi
+  fetch:
+    - crawl4ai
+    - firecrawl
+  validation:
+    - mx_check
+    - abstract

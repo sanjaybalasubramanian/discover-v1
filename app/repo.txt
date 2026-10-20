@@ -1,0 +1,3483 @@
+﻿
+# === FILE: V:\discover\app\extract\emails.py ===
+
+"""
+Email extraction from text with evidence
+"""
+import re
+from typing import List, Optional
+
+
+class ExtractedEmail:
+    """Extracted email with context"""
+    def __init__(self, email: str, surrounding_text: str, name: str = None, title: str = None):
+        self.email = email
+        self.surrounding_text = surrounding_text
+        self.name = name
+        self.title = title
+
+    def to_dict(self):
+        return {
+            'email': self.email,
+            'surrounding_text': self.surrounding_text,
+            'name': self.name,
+            'title': self.title
+        }
+
+def extract_emails(text: str, source_url: str) -> List[ExtractedEmail]:
+    """
+    Extract emails from text with surrounding context
+    """
+    if not text:
+        return []
+
+    # Normalize obfuscations
+    normalized = text
+    replacements = [
+        ('[at]', '@'), ('(at)', '@'), (' at ', '@'),
+        ('[dot]', '.'), ('(dot)', '.'), (' dot ', '.'),
+        ('[AT]', '@'), ('(AT)', '@'),
+        ('[DOT]', '.'), ('(DOT)', '.')
+    ]
+
+    for old, new in replacements:
+        normalized = normalized.replace(old, new)
+
+    # Email regex
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    matches = re.finditer(email_pattern, normalized)
+
+    extracted = []
+    seen = set()
+
+    for match in matches:
+        email = match.group(0).lower().strip()
+
+        # Skip if already seen
+        if email in seen:
+            continue
+        seen.add(email)
+
+        # Skip junk emails
+        if is_junk_email(email):
+            continue
+
+        # Extract surrounding text (200 chars before and after)
+        start = max(0, match.start() - 100)
+        end = min(len(normalized), match.end() + 100)
+        surrounding = normalized[start:end].strip()
+
+        # Try to extract name and title
+        name, title = extract_name_and_title(surrounding, email)
+
+        extracted.append(ExtractedEmail(email, surrounding, name, title))
+
+    return extracted
+
+def is_junk_email(email: str) -> bool:
+    """Check if email is junk/invalid"""
+    junk_patterns = [
+        'example.com', 'test.com', 'sentry.io', 'wixpress.com',
+        'placeholder', 'noreply', 'no-reply', 'donotreply',
+        'john.doe@', 'jane.doe@', 'john.smith@', 'jane.smith@',
+        'johndoe@', 'janedoe@', 'rxxx@', 'xxxx@',
+        'user@', 'email@', 'name@'
+        # Removed: 'admin@', 'info@', 'support@', 'hello@', 'contact@'
+        # Removed: 'careers@', 'hr@', 'recruiting@' - these are valid!
+    ]
+
+    for pattern in junk_patterns:
+        if pattern in email.lower():
+            return True
+
+    # Skip emails with file extensions
+    if re.search(r'\.(jpg|png|gif|svg|css|js|pdf)$', email, re.I):
+        return True
+
+    return False
+
+def extract_name_and_title(text: str, email: str) -> tuple[Optional[str], Optional[str]]:
+    """Extract name and title from surrounding text"""
+    name = None
+    title = None
+
+    # Title keywords
+    title_keywords = [
+        'recruiter', 'talent acquisition', 'hr', 'human resources',
+        'hiring', 'manager', 'lead', 'engineer', 'director', 'specialist'
+    ]
+
+    # Split into lines
+    lines = re.split(r'\n|<br>|;', text)
+
+    for line in lines:
+        if email.lower() in line.lower():
+            # Found line with email
+            parts = re.split(r'[,\-â€“â€”|]', line)
+
+            for part in parts:
+                trimmed = part.strip()
+
+                # Check for title keywords
+                if not title:
+                    for keyword in title_keywords:
+                        if keyword in trimmed.lower():
+                            title = trimmed[:100]  # Limit length
+                            break
+
+                # Check if looks like a name (2-3 capitalized words)
+                if not name and re.match(r'^[A-Z][a-z]+ [A-Z][a-z]+', trimmed):
+                    name = ' '.join(trimmed.split()[:3])
+
+            break
+
+    return name, title
+
+def extract_from_snippet(snippet: str, url: str) -> List[ExtractedEmail]:
+    """Extract emails from search result snippet"""
+    return extract_emails(snippet, url)
+
+def rank_contacts_by_relevance(extracted_emails: List[ExtractedEmail]) -> List[dict]:
+    """
+    Rank extracted emails by likelihood of being recruiter contacts.
+    Simple heuristic-based approach - no LLM needed!
+
+    Returns list of dicts with: email, name, title, confidence
+    """
+    ranked = []
+
+    for extracted in extracted_emails:
+        email = extracted.email.lower()
+        context = extracted.surrounding_text.lower()
+        score = 0.0
+
+        # HIGH PRIORITY: Email prefix suggests recruiting role
+        high_priority_prefixes = ['careers', 'jobs', 'recruit', 'talent', 'hr', 'hiring']
+        if any(prefix in email for prefix in high_priority_prefixes):
+            score += 0.9
+
+        # MEDIUM PRIORITY: Context suggests recruiting role
+        recruiting_keywords = [
+            'recruiter', 'talent acquisition', 'hiring', 'hr',
+            'human resources', 'people', 'talent', 'recruitment'
+        ]
+        if any(keyword in context for keyword in recruiting_keywords):
+            score += 0.7
+
+        # BONUS: Has title or name extracted
+        if extracted.title:
+            score += 0.1
+        if extracted.name:
+            score += 0.1
+
+        # PENALTY: Generic contact emails (likely not personal recruiter)
+        generic_prefixes = ['info', 'contact', 'hello', 'support', 'sales', 'press']
+        if any(prefix in email for prefix in generic_prefixes):
+            score = max(0.2, score - 0.6)  # Lower score but not zero
+
+        # Cap at 1.0
+        confidence = min(score, 1.0)
+
+        ranked.append({
+            'email': extracted.email,
+            'name': extracted.name,
+            'title': extracted.title,
+            'confidence': confidence,
+            'context': extracted.surrounding_text[:200]  # Keep some context
+        })
+
+    # Sort by confidence (highest first)
+    return sorted(ranked, key=lambda x: x['confidence'], reverse=True)
+
+
+# === FILE: V:\discover\app\fetch\crawler.py ===
+
+"""
+Web page fetching using Crawl4AI with domain restrictions
+"""
+import asyncio
+from typing import Optional
+from crawl4ai import AsyncWebCrawler
+from urllib.parse import urlparse
+
+# CRITICAL: Never fetch these domains directly - use snippets only
+RESTRICTED_FETCH_DOMAINS = [
+    'linkedin.com',
+    'www.linkedin.com',
+    'naukri.com',
+    'www.naukri.com'
+]
+
+def should_skip_fetch(url: str) -> bool:
+    """
+    Check if URL should be skipped (LinkedIn, Naukri)
+    These sites provide good snippets, don't need full fetch
+    """
+    try:
+        domain = urlparse(url).netloc.lower()
+        return any(domain.endswith(restricted) for restricted in RESTRICTED_FETCH_DOMAINS)
+    except Exception:
+        return False
+
+async def fetch_page(url: str) -> Optional[str]:
+    """
+    Fetch full page content using Crawl4AI
+    
+    IMPORTANT: Skips LinkedIn and Naukri (use snippets for those)
+    
+    Args:
+        url: Page URL to fetch
+    
+    Returns:
+        Clean text content or None if skipped/failed
+    """
+    
+    # Check if domain is restricted
+    if should_skip_fetch(url):
+        print(f"[Fetch] Skipping restricted domain: {url}")
+        return None
+    
+    try:
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            result = await crawler.arun(
+                url=url,
+                word_count_threshold=10,
+                bypass_cache=False,
+                screenshot=False
+            )
+            
+            if result.success:
+                # Return markdown text (cleaner than HTML)
+                content = result.markdown or result.cleaned_html or ""
+                print(f"[Fetch] Success: {url} ({len(content)} chars)")
+                return content
+            else:
+                print(f"[Fetch] Failed: {url} - {result.error_message}")
+                return None
+                
+    except Exception as e:
+        print(f"[Fetch] Error: {url} - {e}")
+        return None
+
+async def fetch_pages_batch(urls: list[str], max_concurrent: int = 5) -> dict[str, Optional[str]]:
+    """
+    Fetch multiple pages concurrently (skips restricted domains)
+    
+    Args:
+        urls: List of URLs to fetch
+        max_concurrent: Maximum concurrent requests
+    
+    Returns:
+        Dict mapping URL to content (or None if failed/skipped)
+    """
+    
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def fetch_with_limit(url: str):
+        async with semaphore:
+            content = await fetch_page(url)
+            return url, content
+    
+    tasks = [fetch_with_limit(url) for url in urls]
+    results = await asyncio.gather(*tasks)
+    
+    return dict(results)
+
+
+# === FILE: V:\discover\app\fetch\__init__.py ===
+
+"""Fetch module"""
+from app.fetch.crawler import fetch_page, fetch_pages_batch
+
+__all__ = ['fetch_page', 'fetch_pages_batch']
+
+# === FILE: V:\discover\app\filters\relevance.py ===
+
+"""
+Job relevance checking - simple keyword-based approach
+No LLM needed!
+"""
+
+def is_relevant_job(title: str, description: str) -> tuple[bool, float]:
+    """
+    Check if job is relevant for GenAI/LLM/AI Engineer role.
+    Returns (is_relevant, confidence_score)
+
+    Simple keyword matching approach - fast and free!
+    """
+    if not title and not description:
+        return False, 0.0
+
+    # Combine title and description for checking
+    text = f"{title} {description}".lower()
+
+    # HIGH PRIORITY KEYWORDS (strong signals)
+    high_priority = [
+        'genai', 'gen ai', 'generative ai',
+        'llm', 'large language model',
+        'ai engineer', 'ml engineer',
+        'machine learning engineer',
+        'deep learning engineer',
+        'artificial intelligence engineer'
+    ]
+
+    # MEDIUM PRIORITY KEYWORDS (good signals)
+    medium_priority = [
+        'ai', 'artificial intelligence',
+        'machine learning', 'ml',
+        'deep learning', 'neural network',
+        'nlp', 'natural language processing',
+        'computer vision', 'cv',
+        'pytorch', 'tensorflow', 'keras',
+        'transformers', 'bert', 'gpt'
+    ]
+
+    # NEGATIVE KEYWORDS (likely not what we want)
+    negative_keywords = [
+        'data analyst', 'business analyst',
+        'sales', 'marketing', 'customer success',
+        'support engineer', 'qa engineer', 'test engineer',
+        'devops engineer', 'sre', 'infrastructure',
+        'frontend', 'full stack', 'web developer'
+    ]
+
+    score = 0.0
+
+    # Check high priority keywords
+    for keyword in high_priority:
+        if keyword in text:
+            score += 0.4
+
+    # Check medium priority keywords
+    for keyword in medium_priority:
+        if keyword in text:
+            score += 0.2
+
+    # Check negative keywords (penalties)
+    for keyword in negative_keywords:
+        if keyword in text:
+            score -= 0.3
+
+    # Bonus for "engineer" in title
+    if 'engineer' in title.lower():
+        score += 0.1
+
+    # Cap score between 0 and 1
+    confidence = max(0.0, min(1.0, score))
+
+    # Consider relevant if confidence >= 0.5
+    is_relevant = confidence >= 0.5
+
+    return is_relevant, confidence
+
+# === FILE: V:\discover\app\filters\__init__.py ===
+
+
+# === FILE: V:\discover\app\llm\client.py ===
+
+"""
+AWS Bedrock LLM client for intelligent parsing and extraction
+Supports Claude 3.5 Sonnet and Claude 3 Haiku
+"""
+import json
+import os
+from typing import List, Optional
+
+import boto3
+from pydantic import BaseModel
+
+# Initialize Bedrock client
+bedrock = boto3.client(
+    service_name='bedrock-runtime',
+    region_name=os.getenv('AWS_REGION', 'us-east-1'),
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+)
+
+# Model configuration
+BEDROCK_MODEL = os.getenv('BEDROCK_MODEL', 'anthropic.claude-3-5-sonnet-20240620-v1:0')
+# Options:
+# - anthropic.claude-3-5-sonnet-20240620-v1:0 (smart, expensive)
+# - anthropic.claude-3-haiku-20240307-v1:0 (fast, cheap)
+
+# Structured outputs
+class ParsedJob(BaseModel):
+    """Structured job data"""
+    company_name: str
+    role_title: str
+    location: str
+    experience_years: Optional[int] = None
+    is_relevant: bool
+    confidence: float  # 0-1
+
+class ExtractedContact(BaseModel):
+    """Structured contact data"""
+    email: str
+    name: Optional[str] = None
+    title: Optional[str] = None
+    is_recruiter: bool
+    confidence: float  # 0-1
+    reasoning: str
+
+async def invoke_bedrock(prompt: str, system: str = "", max_tokens: int = 500) -> str:
+    """
+    Call AWS Bedrock with Claude model
+
+    Args:
+        prompt: User prompt
+        system: System message
+        max_tokens: Max response tokens
+
+    Returns:
+        Model response text
+    """
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "thinking": {
+            "type": "adaptive"
+        },
+        "output_config": {
+            "effort": "low"
+        },
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    }
+
+    if system:
+        body["system"] = system
+
+    try:
+        response = bedrock.invoke_model(
+            modelId=BEDROCK_MODEL,
+            body=json.dumps(body)
+        )
+
+        response_body = json.loads(response['body'].read())
+
+        # Handle different response formats
+        if 'content' in response_body:
+            # Standard format: {"content": [{"text": "..."}, {"type": "thinking", ...}]}
+            content_items = response_body['content']
+
+            # Find the text content (skip thinking/other types)
+            for item in content_items:
+                if isinstance(item, dict):
+                    if item.get('type') == 'text' and 'text' in item:
+                        return item['text']
+                    elif 'text' in item and item.get('type') != 'thinking':
+                        return item['text']
+
+            # Fallback: if no text found, check if there's thinking output
+            for item in content_items:
+                if isinstance(item, dict) and 'thinking' in item:
+                    return item['thinking']
+
+            # Last resort: return first item with text
+            if content_items and isinstance(content_items[0], dict) and 'text' in content_items[0]:
+                return content_items[0]['text']
+
+            raise ValueError(f"No text content found in response: {content_items}")
+
+        elif 'completion' in response_body:
+            # Legacy format: {"completion": "..."}
+            return response_body['completion']
+        else:
+            # Fallback: try to extract text from any structure
+            print(f"Unknown response format: {response_body.keys()}")
+            raise ValueError(f"Unexpected response format: {list(response_body.keys())}")
+
+    except KeyError as e:
+        print(f"Bedrock API error: Missing key '{e}' in response")
+        print(f"Response structure: {response_body if 'response_body' in locals() else 'N/A'}")
+        raise
+    except Exception as e:
+        print(f"Bedrock API error: {e}")
+        raise
+
+async def parse_job_listing(
+    title: str,
+    url: str,
+    snippet: str,
+    full_text: Optional[str] = None
+) -> ParsedJob:
+    """
+    Parse job listing using LLM to extract structured data
+
+    Args:
+        title: Raw search result title
+        url: Job listing URL
+        snippet: Search result snippet
+        full_text: Full page text (if available)
+
+    Returns:
+        ParsedJob with clean, structured data
+    """
+
+    context = full_text if full_text else snippet
+
+    prompt = f"""You are an expert at parsing job listings. Extract structured data from this job posting.
+
+URL: {url}
+Title: {title}
+Content: {context[:2000]}
+
+Extract:
+1. company_name: The company hiring (clean name only, no extra text)
+2. role_title: The job role (clean title, e.g., "GenAI Engineer", "AI Engineer")
+3. location: Primary work location (city name or "Remote")
+4. experience_years: Required years of experience (integer, null if not specified)
+5. is_relevant: Is this a GenAI/LLM/AI Engineer role? (boolean)
+6. confidence: Your confidence in the extraction (0.0 to 1.0)
+
+Return ONLY valid JSON:
+{{
+  "company_name": "string",
+  "role_title": "string",
+  "location": "string",
+  "experience_years": number or null,
+  "is_relevant": boolean,
+  "confidence": number
+}}
+
+Rules:
+- Clean company names (remove "Jobs at", "Careers", etc.)
+- Standardize role titles (use "GenAI Engineer" not "Gen AI Eng")
+- Location should be city name or "Remote" or "Remote (India)"
+- Only mark is_relevant=true for AI/ML/GenAI engineering roles
+"""
+
+    system = "You are a precise job listing parser. Always return valid JSON only, no markdown or extra text."
+
+    try:
+        response_text = await invoke_bedrock(prompt, system, max_tokens=300)
+
+        # Extract JSON from response (Claude sometimes adds markdown)
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        json_str = response_text[json_start:json_end]
+
+        result = json.loads(json_str)
+        return ParsedJob(**result)
+
+    except Exception as e:
+        print(f"LLM parsing failed: {e}")
+        # Fallback to basic parsing
+        return ParsedJob(
+            company_name=title.split('|')[0].strip() if '|' in title else "Unknown",
+            role_title=title.split('|')[1].strip() if '|' in title else title[:100],
+            location="Unknown",
+            experience_years=None,
+            is_relevant=True,
+            confidence=0.3
+        )
+
+async def extract_best_contacts(
+    page_text: str,
+    url: str,
+    found_emails: List[str]
+) -> List[ExtractedContact]:
+    """
+    Use LLM to identify best contacts from extracted emails
+
+    Args:
+        page_text: Full page content
+        url: Source URL
+        found_emails: List of email addresses found via regex
+
+    Returns:
+        List of ExtractedContact, ranked by relevance
+    """
+
+    if not found_emails:
+        return []
+
+    # Limit context to reduce tokens
+    context_snippet = page_text[:3000]
+
+    prompt = f"""You are an expert at identifying the best contact person for job applications.
+
+Source: {url}
+Context: {context_snippet}
+
+Found these email addresses:
+{json.dumps(found_emails)}
+
+For EACH email, determine:
+1. email: The email address
+2. name: Person's name if mentioned (or null)
+3. title: Person's job title if mentioned (or null)
+4. is_recruiter: Is this a recruiter/HR/hiring manager? (boolean)
+5. confidence: How confident are you this is a good contact? (0.0 to 1.0)
+6. reasoning: Brief explanation (1 sentence)
+
+Ranking: Named recruiters > HR emails > Generic emails
+Avoid: noreply@, info@, admin@
+
+Return valid JSON array sorted by confidence (highest first):
+[{{"email": "...", "name": null, "title": null, "is_recruiter": true, "confidence": 0.9, "reasoning": "..."}}]
+"""
+
+    system = "You are an expert at evaluating job contacts. Return valid JSON array only."
+
+    try:
+        response_text = await invoke_bedrock(prompt, system, max_tokens=800)
+
+        # Extract JSON array from response
+        json_start = response_text.find('[')
+        json_end = response_text.rfind(']') + 1
+        json_str = response_text[json_start:json_end]
+
+        contacts_data = json.loads(json_str)
+
+        return [ExtractedContact(**contact) for contact in contacts_data]
+
+    except Exception as e:
+        print(f"LLM contact extraction failed: {e}")
+        # Fallback
+        return [
+            ExtractedContact(
+                email=email,
+                name=None,
+                title=None,
+                is_recruiter='hr' in email.lower() or 'career' in email.lower(),
+                confidence=0.5,
+                reasoning="Fallback scoring"
+            )
+            for email in found_emails
+        ]
+
+
+
+# === FILE: V:\discover\app\llm\__init__.py ===
+
+"""LLM integration module"""
+from app.llm.client import parse_job_listing, extract_best_contacts, ParsedJob, ExtractedContact
+
+__all__ = ['parse_job_listing', 'extract_best_contacts', 'ParsedJob', 'ExtractedContact']
+
+# === FILE: V:\discover\app\models\contact.py ===
+
+"""
+Contact and Evidence models
+"""
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+from app.db import Base
+import uuid
+
+class Contact(Base):
+    __tablename__ = 'contacts'
+    
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    email = Column(String(255), nullable=False, unique=True)
+    name = Column(String(255))
+    title = Column(String(255))
+    tracking_token = Column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4)
+    validation_status = Column(String(50), default='pending')
+    validation_score = Column(Integer)
+    mx_valid = Column(Boolean)
+    source_count = Column(Integer, default=0)
+    status = Column(String(50), default='discovered')
+    inferred = Column(Boolean, default=False)
+    approved = Column(Boolean, default=False)
+    last_contacted_at = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class Evidence(Base):
+    __tablename__ = 'evidence'
+    
+    id = Column(Integer, primary_key=True)
+    contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'))
+    source_url = Column(Text, nullable=False)
+    source_type = Column(String(50), nullable=False)
+    surrounding_text = Column(Text)
+    fetched_at = Column(DateTime, server_default=func.now())
+
+class Validation(Base):
+    __tablename__ = 'validations'
+    
+    id = Column(Integer, primary_key=True)
+    contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'))
+    validator = Column(String(50), nullable=False)
+    result = Column(String(50))
+    score = Column(Integer)
+    details = Column(Text)  # JSON string
+    validated_at = Column(DateTime, server_default=func.now())
+
+# === FILE: V:\discover\app\models\outreach.py ===
+
+"""
+Outreach, Opens, and other tracking models
+"""
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Date, ForeignKey, DECIMAL
+from sqlalchemy.sql import func
+from app.db import Base
+
+class Outreach(Base):
+    __tablename__ = 'outreach'
+    
+    id = Column(Integer, primary_key=True)
+    contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'))
+    job_id = Column(Integer, ForeignKey('jobs.id', ondelete='SET NULL'))
+    subject = Column(String(500), nullable=False)
+    resume_file = Column(String(255), nullable=False)
+    status = Column(String(50), default='queued')
+    scheduled_for = Column(DateTime)
+    sent_at = Column(DateTime)
+    bounced_at = Column(DateTime)
+    replied_at = Column(DateTime)
+    reply_type = Column(String(50))
+    reply_notes = Column(Text)
+    message_id = Column(String(255))
+    created_at = Column(DateTime, server_default=func.now())
+
+class Open(Base):
+    __tablename__ = 'opens'
+    
+    id = Column(Integer, primary_key=True)
+    contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'))
+    outreach_id = Column(Integer, ForeignKey('outreach.id', ondelete='CASCADE'))
+    opened_at = Column(DateTime, server_default=func.now())
+    user_agent = Column(Text)
+    ip_hash = Column(Text)
+    is_machine_open = Column(Boolean, default=False)
+
+class Suppression(Base):
+    __tablename__ = 'suppression'
+    
+    id = Column(Integer, primary_key=True)
+    email_hash = Column(Text, nullable=False, unique=True)
+    reason = Column(String(100), nullable=False)
+    added_at = Column(DateTime, server_default=func.now())
+
+class ProviderUsage(Base):
+    __tablename__ = 'provider_usage'
+    
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(100), nullable=False)
+    date = Column(Date, nullable=False)
+    calls = Column(Integer, default=0)
+    errors = Column(Integer, default=0)
+    estimated_cost = Column(DECIMAL(10, 2), default=0.00)
+
+class CacheSearch(Base):
+    __tablename__ = 'cache_search'
+    
+    id = Column(Integer, primary_key=True)
+    query_hash = Column(Text, nullable=False, unique=True)
+    results = Column(Text, nullable=False)  # JSON string
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class CachePage(Base):
+    __tablename__ = 'cache_pages'
+    
+    id = Column(Integer, primary_key=True)
+    url_hash = Column(Text, nullable=False, unique=True)
+    content = Column(Text, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class Settings(Base):
+    __tablename__ = 'settings'
+    
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255), nullable=False, unique=True)
+    value = Column(Text)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class GmailAuth(Base):
+    __tablename__ = 'gmail_auth'
+    
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), nullable=False, unique=True)
+    refresh_token = Column(Text, nullable=False)
+    access_token = Column(Text)
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+# === FILE: V:\discover\app\models\schedule.py ===
+
+"""
+Schedule model for managing pipeline schedules
+"""
+from sqlalchemy import Column, Integer, String, Boolean, JSON, DateTime
+from sqlalchemy.sql import func
+from app.db import Base
+
+class Schedule(Base):
+    __tablename__ = 'schedules'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False, default='Daily Run')
+    cron_expression = Column(String(100), nullable=False)  # e.g., "0 3 * * *" (03:00 UTC = 08:30 IST)
+    timezone = Column(String(50), default='Asia/Kolkata')
+    enabled = Column(Boolean, default=True)
+    max_jobs = Column(Integer, default=50)
+    config = Column(JSON)  # Additional config options
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+# === FILE: V:\discover\app\models\__init__.py ===
+
+"""
+Database models - Part 1: Core tables
+"""
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.sql import func
+
+from app.db import Base
+
+
+class Run(Base):
+    __tablename__ = 'runs'
+
+    id = Column(Integer, primary_key=True)
+    started_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime)
+    status = Column(String(50), default='running')
+    phase = Column(String(50), default='discovery')  # 'discovery', 'research', 'outreach'
+    jobs_found = Column(Integer, default=0)
+    jobs_filtered = Column(Integer, default=0)
+    companies_eligible = Column(Integer, default=0)
+    companies_contacted = Column(Integer, default=0)
+    emails_queued = Column(Integer, default=0)
+    emails_sent = Column(Integer, default=0)
+    shortfall_reason = Column(Text)
+    error_message = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+class Job(Base):
+    __tablename__ = 'jobs'
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey('runs.id', ondelete='CASCADE'))
+    company_name = Column(String(255), nullable=False)
+    company_domain = Column(String(255))
+    role_title = Column(String(500), nullable=False)
+    location = Column(String(255), nullable=False)
+    location_matched = Column(Boolean, default=False)
+    posted_date = Column(Date)
+    source_url = Column(Text, nullable=False)
+    snippet = Column(Text)
+    fit_score = Column(Integer, default=0)
+    status = Column(String(50), default='discovered')
+    filter_reason = Column(Text)
+    fetched_text = Column(Text)
+    # JobSpy fields
+    job_source = Column(String(50))  # 'linkedin', 'naukri', 'indeed', 'glassdoor', 'ziprecruiter'
+    job_type = Column(String(50))  # 'fulltime', 'parttime', 'contract', 'internship', 'temporary'
+    is_remote = Column(Boolean, default=False)
+    salary_info = Column(String(255))
+    company_url = Column(String(500))
+    created_at = Column(DateTime, server_default=func.now())
+
+class Company(Base):
+    __tablename__ = 'companies'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    domain = Column(String(255))
+    industry = Column(String(255))
+    notes = Column(Text)
+    research_status = Column(String(50), default='pending')  # 'pending', 'completed', 'failed'
+    research_attempts = Column(Integer, default=0)
+    researched_at = Column(DateTime)
+    last_contacted_at = Column(DateTime)
+    status = Column(String(50), default='active')
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+# === FILE: V:\discover\app\pipeline\runner.py ===
+
+'''Main pipeline runner - using JobSpy for job discovery'''
+import os
+from datetime import datetime
+from typing import Any, Dict
+
+from sqlalchemy.orm import Session
+
+from app.config import calculate_fit_score, matches_location
+from app.models import Company, Job, Run
+from app.models.contact import Contact
+from app.search.jobspy_scraper import JobSpyScraper, build_jobspy_searches
+
+
+async def run_pipeline(run_id: int, db: Session) -> Dict[str, Any]:
+    """Main outreach pipeline with JobSpy"""
+    run = db.query(Run).filter(Run.id == run_id).first()
+    if not run:
+        raise Exception(f"Run {run_id} not found")
+    try:
+        print(f"[Pipeline] Starting run #{run_id} with JobSpy")
+        scraper = JobSpyScraper()
+        searches = build_jobspy_searches()
+        jobs_found = 0
+        contacts_found = 0
+        processed_urls = set()
+        for search_config in searches:
+            print(f"[Pipeline] Scraping: {search_config['search_term']} in {search_config['location']}")
+            job_results = scraper.scrape_jobs(**search_config)
+            for job_data in job_results:
+                job_url = job_data['job_url']
+                if job_url in processed_urls:
+                    continue
+                processed_urls.add(job_url)
+
+                # Validate required fields
+                if not job_data.get('title'):
+                    print("[Pipeline] ⚠️  Skipping - no job title")
+                    continue
+
+                if not job_data.get('company'):
+                    print("[Pipeline] ⚠️  Skipping - no company name")
+                    continue
+
+                print(f"[Pipeline] Processing: {job_data['title'][:60]}...")
+
+                # Get description (may be empty for some jobs)
+                description = job_data.get('description', '')
+                if not description:
+                    print("[Pipeline] ⚠️  No description available, using title only for relevance check")
+
+                # Check relevance with simple keyword matching (no LLM!)
+                from app.filters.relevance import is_relevant_job
+                is_relevant, confidence = is_relevant_job(
+                    title=job_data['title'],
+                    description=description
+                )
+
+                if not is_relevant:
+                    print(f"[Pipeline] Skipping irrelevant job (confidence: {confidence:.2f})")
+                    continue
+
+                # Get location (use "Unknown" if None to satisfy NOT NULL constraint)
+                location = job_data.get('location') or "Unknown"
+                if location == "Unknown":
+                    print("[Pipeline] ⚠️  No location provided, using 'Unknown'")
+
+                location_matched, reason = matches_location(job_data.get('location'))
+                fit_score = calculate_fit_score(job_data['title'], description)
+                company = db.query(Company).filter(Company.name == job_data['company']).first()
+                if not company:
+                    company = Company(
+                        name=job_data['company'],
+                        domain=extract_domain_from_url(job_data.get('company_url', '')),
+                        industry=job_data.get('company_industry'),
+                        research_status='pending'
+                    )
+                    db.add(company)
+                    db.flush()
+                job = Job(
+                    run_id=run_id,
+                    company_name=job_data['company'],
+                    role_title=job_data['title'],
+                    location=location,  # Use sanitized location (never None)
+                    location_matched=location_matched,
+                    posted_date=job_data.get('date_posted'),
+                    source_url=job_data['job_url'],
+                    snippet=description[:500] if description else job_data['title'],  # Use title if no description
+                    fit_score=fit_score,
+                    status='discovered',
+                    fetched_text=description,
+                    job_source=job_data['site'],
+                    job_type=job_data.get('job_type', '')[:50] if job_data.get('job_type') else None,  # Truncate to 50 chars
+                    is_remote=job_data.get('is_remote', False),
+                    salary_info=job_data.get('salary'),
+                    company_url=job_data.get('company_url'),
+                )
+                db.add(job)
+                db.flush()
+                jobs_found += 1
+                print(f"[Pipeline] ✓ Saved job: {job_data['title'][:50]} at {job_data['company']}")
+
+                # Extract contacts if company URL available (optional - can be disabled)
+                if os.getenv('PHASE1_EXTRACT_CONTACTS', 'true').lower() == 'false':
+                    continue  # Skip Phase 1 contact extraction
+
+                company_url = job_data.get('company_url')
+                if company_url:
+                    try:
+                        print(f"[Pipeline] Extracting contacts for {job_data['company']}...")
+                        from app.extract.emails import (
+                            extract_emails,
+                            rank_contacts_by_relevance,
+                        )
+                        from app.fetch.crawler import fetch_page
+
+                        # Fetch company page
+                        page_content = await fetch_page(company_url)
+                        if page_content:
+                            # Extract emails using regex
+                            extracted_emails_obj = extract_emails(page_content, company_url)
+
+                            if extracted_emails_obj:
+                                # Rank contacts using simple heuristics (no LLM!)
+                                ranked_contacts = rank_contacts_by_relevance(extracted_emails_obj)
+
+                                for contact_data in ranked_contacts:
+                                    if contact_data['confidence'] < 0.5:
+                                        continue
+                                    contact = db.query(Contact).filter(Contact.email == contact_data['email']).first()
+                                    if not contact:
+                                        contact = Contact(
+                                            company_id=company.id,
+                                            email=contact_data['email'],
+                                            name=contact_data.get('name'),
+                                            title=contact_data.get('title'),
+                                            source_count=1,
+                                            status='discovered'
+                                        )
+                                        db.add(contact)
+                                        db.flush()
+                                        contacts_found += 1
+                                        print(f"[Pipeline] ✓ Contact: {contact_data['email']} (confidence: {contact_data['confidence']:.2f})")
+                            else:
+                                print("[Pipeline] No emails found on company page")
+                        else:
+                            print("[Pipeline] Could not fetch company page")
+                    except Exception as e:
+                        print(f"[Pipeline] Error extracting contacts: {e}")
+                else:
+                    print("[Pipeline] No company URL available for contact extraction")
+
+        db.commit()
+        run.jobs_found = jobs_found
+        run.companies_eligible = db.query(Company).count()
+        run.status = 'completed'
+        run.completed_at = datetime.now()
+        db.commit()
+        print(f"[Pipeline] Run #{run_id} completed. Found {jobs_found} jobs, {contacts_found} contacts")
+        return {"jobs_found": jobs_found, "contacts_found": contacts_found, "message": "Pipeline completed successfully"}
+    except Exception as e:
+        print(f"[Pipeline] Error in run #{run_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        run.status = 'failed'
+        run.error_message = str(e)
+        run.completed_at = datetime.now()
+        try:
+            db.rollback()  # Rollback failed transaction before committing run status
+            db.commit()
+        except Exception as commit_error:
+            print(f"[Pipeline] Failed to save error status: {commit_error}")
+        raise
+
+def extract_domain_from_url(url: str) -> str:
+    """Extract domain from URL"""
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc or parsed.path
+        domain = domain.replace('www.', '')
+        return domain
+    except Exception:
+        return ""
+
+
+# === FILE: V:\discover\app\pipeline\runner_temp.py ===
+
+'''Main pipeline runner with LLM and Crawl4AI - using JobSpy for job discovery'''
+
+
+
+async def run_pipeline(run_id: int, db): pass
+
+# === FILE: V:\discover\app\research\agent.py ===
+
+"""
+Phase 2: Research Agent using LangGraph + AWS Bedrock
+Finds personal recruiter contacts for companies using agentic workflow
+"""
+import os
+from datetime import datetime
+from typing import Any, Dict
+
+from langchain_aws import ChatBedrock
+from langgraph.prebuilt import create_react_agent
+from sqlalchemy.orm import Session
+
+from app.models import Company
+from app.models.contact import Contact
+from app.research.tools import RESEARCH_TOOLS
+
+
+async def research_company_contacts(
+    company_name: str,
+    db: Session,
+    max_contacts: int = 5
+) -> Dict[str, Any]:
+    """
+    Use LangGraph agent with Bedrock to find personal recruiter contacts
+
+    Args:
+        company_name: Company to research
+        db: Database session
+        max_contacts: Max contacts to find
+
+    Returns:
+        Dict with personal and fallback contacts
+    """
+
+    print(f"[Research] Starting agentic research for {company_name}")
+
+    # Get/create company
+    company = db.query(Company).filter(Company.name == company_name).first()
+    if not company:
+        company = Company(name=company_name, research_status='in_progress')
+        db.add(company)
+        db.flush()
+    else:
+        company.research_status = 'in_progress'
+        company.research_attempts += 1
+        db.commit()
+
+    # Retry logic: max 3 attempts
+    max_attempts = 3
+    attempt = company.research_attempts
+
+    if attempt > max_attempts:
+        print(f"[Research] Max attempts ({max_attempts}) reached, marking as failed")
+        company.research_status = 'failed'
+        db.commit()
+
+        return {
+            'company': company_name,
+            'personal_contacts': [],
+            'fallback_contacts': [],
+            'total_contacts': 0,
+            'success': False,
+            'error': f'Max retry attempts ({max_attempts}) exceeded'
+        }
+
+    try:
+        print(f"[Research] Attempt {attempt}/{max_attempts}")
+
+        # Create and run agent
+        agent = await _create_research_agent()
+        contacts_found = await _run_agent_research(agent, company_name, company, db)
+
+        # Mark complete
+        company.research_status = 'completed'
+        company.researched_at = datetime.now()
+        db.commit()
+
+        # Categorize by email pattern (simple heuristic)
+        # Personal: has firstname.lastname or similar patterns
+        # Generic: sales@, info@, careers@, etc.
+        personal = [c for c in contacts_found if c['email'] and '@' in c['email'] and '.' in c['email'].split('@')[0]]
+        fallback = [c for c in contacts_found if c not in personal]
+
+        print(f"[Research] FOUND {len(contacts_found)} contacts")
+        print(f"[Research]   {len(personal)} personal, {len(fallback)} fallback")
+
+        return {
+            'company': company_name,
+            'personal_contacts': personal,
+            'fallback_contacts': fallback,
+            'total_contacts': len(contacts_found),
+            'success': True
+        }
+
+    except Exception as e:
+        print(f"[Research] ERROR on attempt {attempt}: {e}")
+
+        # Don't mark as failed yet, will retry
+        if attempt < max_attempts:
+            company.research_status = 'pending'
+            print(f"[Research] Will retry (attempts left: {max_attempts - attempt})")
+        else:
+            company.research_status = 'failed'
+            print("[Research] Max attempts reached, marking as failed")
+
+        db.commit()
+
+        return {
+            'company': company_name,
+            'personal_contacts': [],
+            'fallback_contacts': [],
+            'total_contacts': 0,
+            'success': False,
+            'error': str(e),
+            'will_retry': attempt < max_attempts
+        }
+
+
+async def _create_research_agent():
+    """Create LangGraph agent with Bedrock Claude"""
+
+    print("[Agent] Initializing Bedrock Claude model")
+
+    # Initialize Bedrock Chat Model
+    llm = ChatBedrock(
+        model_id=os.getenv('BEDROCK_MODEL', 'anthropic.claude-3-5-sonnet-20240620-v1:0'),
+        region_name=os.getenv('AWS_REGION', 'us-east-1'),
+        credentials_profile_name=None,  # Use env vars
+        model_kwargs={
+            "max_tokens": 4000,
+        }
+    )
+
+    print(f"[Agent] Creating ReAct agent with {len(RESEARCH_TOOLS)} tools")
+
+    # Create ReAct agent with research tools
+    agent = create_react_agent(llm, RESEARCH_TOOLS)
+
+    return agent
+
+
+
+async def _run_agent_research(agent, company_name: str, company: Company, db: Session) -> list:
+    """
+    Execute agent research workflow
+
+    Args:
+        agent: LangGraph agent
+        company_name: Company to research
+        company: Company model instance
+        db: Database session
+
+    Returns:
+        List of contact dictionaries
+    """
+
+    # Set tool context for database access
+    from app.research.tools import set_tool_context
+    set_tool_context(company, db)
+
+    # Define research task - Intelligent agent with real-world search strategy
+    task_prompt = f"""You are a research agent finding recruiter contact information for {company_name}.
+
+GOAL: Find 3-5 REAL, PUBLISHED email addresses of recruiters/HR personnel.
+
+TARGET ROLES:
+- Talent Acquisition Managers
+- Technical Recruiters (especially for tech/engineering roles)
+- HR Business Partners
+- Engineering Hiring Managers
+
+LOCATION PREFERENCE (not strict):
+- Prefer recruiters from Chennai, Tamil Nadu, India
+- But also accept recruiters from other locations in India or globally
+- Location is a bonus, not a requirement
+
+TOOLS AVAILABLE:
+1. web_search(query) - Search the web with ANY query you craft
+2. fetch_and_read_page(url) - Read content from a URL, extract emails, and **AUTO-SAVES** them!
+3. save_discovered_contacts(contacts) - Manually save contacts if needed
+
+WHERE RECRUITERS ACTUALLY SHARE EMAILS (be smart about this):
+
+1. **LinkedIn Posts** - Recruiters often post job openings with their email
+   - Search: "{company_name} recruiter email site:linkedin.com"
+   - Search: "{company_name} hiring Chennai email site:linkedin.com"
+   - Look for posts like "We're hiring! Contact me at..."
+
+2. **Job Boards (Naukri, Indeed, etc.)** - Job posts sometimes include recruiter contact
+   - Search: "{company_name} recruiter contact site:naukri.com"
+   - Search: "{company_name} chennai recruiter email site:indeed.co.in"
+
+3. **Company Career Pages** - Some have "Contact Recruiting" sections
+   - Search: "{company_name} careers contact us"
+   - Look for: careers@, recruiting@, talent@, hr@
+
+4. **Press Releases / News** - Announcements about new HR hires
+   - Search: "{company_name} talent acquisition manager"
+   - Look for quotes from HR leaders with contact info
+
+5. **Medium / Company Blogs** - Recruiters write articles and include emails
+   - Search: "{company_name} recruiter blog email"
+   - Tech companies often have engineering blogs
+
+6. **GitHub / Dev Communities** - Tech recruiters sometimes post there
+   - Search: "{company_name} recruiter github"
+
+SMART SEARCH QUERY EXAMPLES:
+- "{company_name} recruiter email Chennai"
+- "{company_name} talent acquisition contact India"
+- "{company_name} hiring manager email linkedin"
+- "{company_name} HR recruiting team contact"
+- "apply {company_name} recruiter email" (people asking how to apply)
+
+WORKFLOW:
+1. Start with 2-3 different search queries targeting different sources
+2. Look for LinkedIn posts, Naukri listings, career pages
+3. When you find promising URLs, fetch and read them
+4. Extract ANY real emails you find (personal or generic - both are good!)
+5. **IMMEDIATELY call save_discovered_contacts** when you find ANY emails
+6. Try different query variations if needed
+7. Stop when you have 3-5 contacts or exhausted options
+
+**CRITICAL: You MUST call save_discovered_contacts with the emails you find, or they will be lost!**
+
+ACCEPTABLE EMAILS:
+âœ… Personal: john.doe@company.com, sarah.recruiter@company.com
+âœ… Generic: careers@company.com, hr@company.com, recruiting@company.com
+âœ… Department: talent@company.com, hiring@company.com
+âŒ Junk: noreply@, donotreply@, example.com, test.com
+
+FORMAT for save_discovered_contacts:
+[
+  {{
+    "email": "recruiting@company.com",
+    "name": null,  # or "John Doe" if you found a name
+    "title": "Recruiting Team",  # or specific title if found
+    "source": "linkedin_post",  # or "careers_page", "naukri", etc.
+    "url": "https://linkedin.com/posts/..."  # REQUIRED - where you found it
+  }}
+]
+
+IMPORTANT: Be thorough! Try multiple search strategies. Recruiters DO share emails online.
+
+Start by thinking: "Where would {company_name} recruiters post job openings with their contact info?"
+"""
+
+    print(f"[Agent] Starting research task for {company_name}")
+
+    # Execute agent with timeout (configurable via RESEARCH_AGENT_TIMEOUT)
+    import asyncio
+    timeout_seconds = int(os.getenv('RESEARCH_AGENT_TIMEOUT', '60'))
+
+    try:
+        await asyncio.wait_for(
+            agent.ainvoke({
+                "messages": [("user", task_prompt)]
+            }),
+            timeout=timeout_seconds
+        )
+    except asyncio.TimeoutError:
+        raise Exception(f"Agent execution timed out after {timeout_seconds} seconds")
+
+    print("[Agent] Completed, parsing results")
+
+    # Refresh session to see committed changes from tools
+    db.expire_all()
+    
+    # Query contacts that were saved
+    contacts = db.query(Contact).filter(
+        Contact.company_id == company.id,
+        Contact.status == 'discovered'
+    ).all()
+
+    contacts_found = [
+        {
+            'email': c.email,
+            'name': c.name,
+            'title': c.title
+        }
+        for c in contacts
+    ]
+
+    print(f"[Agent] Extracted {len(contacts_found)} contacts from database")
+
+    return contacts_found
+
+# === FILE: V:\discover\app\research\prioritizer.py ===
+
+"""
+Contact prioritization logic
+Priority: 1=highest (personal), 5=lowest (generic)
+"""
+from typing import Dict
+
+
+def calculate_contact_priority(email: str, name: str = None, title: str = None, source_type: str = None) -> Dict[str, any]:
+    """
+    Calculate priority and classification for a contact
+    
+    Returns:
+        {
+            'priority': int (1-5),
+            'email_type': str (personal, generic, inferred),
+            'confidence': float (0.0-1.0)
+        }
+    """
+    
+    if not email or '@' not in email:
+        return {'priority': 5, 'email_type': 'unknown', 'confidence': 0.1}
+    
+    local_part = email.split('@')[0].lower()
+    
+    # Priority 1: Personal emails (firstname.lastname or firstname)
+    if '.' in local_part and len(local_part.split('.')) == 2:
+        # Looks like firstname.lastname
+        parts = local_part.split('.')
+        if all(len(p) >= 2 for p in parts):  # Both parts at least 2 chars
+            return {
+                'priority': 1,
+                'email_type': 'personal',
+                'confidence': 0.9 if name else 0.7
+            }
+    
+    # Check if name matches email pattern
+    if name:
+        name_lower = name.lower().replace(' ', '')
+        if name_lower in local_part.replace('.', '').replace('_', ''):
+            return {
+                'priority': 1,
+                'email_type': 'personal',
+                'confidence': 0.95
+            }
+    
+    # Priority 2: Named recruiter-specific emails
+    recruiter_keywords = ['recruit', 'talent', 'hiring', 'hr']
+    if any(kw in local_part for kw in recruiter_keywords):
+        if name and title:
+            return {
+                'priority': 2,
+                'email_type': 'personal',
+                'confidence': 0.8
+            }
+        else:
+            # Generic recruiter email
+            return {
+                'priority': 4,
+                'email_type': 'generic',
+                'confidence': 0.5
+            }
+    
+    # Priority 3: Inferred emails (from pattern matching)
+    if source_type == 'inferred':
+        return {
+            'priority': 3,
+            'email_type': 'inferred',
+            'confidence': 0.6
+        }
+    
+    # Priority 5: Generic/fallback emails
+    generic_prefixes = ['careers', 'jobs', 'hr', 'info', 'contact', 'hello', 'support', 'admin']
+    if local_part in generic_prefixes:
+        return {
+            'priority': 5,
+            'email_type': 'generic',
+            'confidence': 0.9  # High confidence it's generic
+        }
+    
+    # Default: Unknown pattern
+    return {
+        'priority': 4,
+        'email_type': 'unknown',
+        'confidence': 0.4
+    }
+
+
+def rank_contacts(contacts: list) -> list:
+    """
+    Rank contacts by priority and confidence
+    Returns sorted list (best first)
+    """
+    return sorted(contacts, key=lambda c: (c.get('priority', 5), -c.get('confidence', 0)))
+
+# === FILE: V:\discover\app\research\tools.py ===
+
+"""
+Phase 2 Research Tools for LangGraph Agent
+Simplified tool set for intelligent, agentic research
+"""
+from typing import Any, Dict, List
+
+from langchain_core.tools import tool
+
+from app.extract.emails import extract_emails
+from app.fetch.crawler import fetch_page
+
+
+@tool
+def web_search(query: str, max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    Search the web for any query - you decide what to search for.
+
+    Think like Google AI: craft queries that will find what you need.
+
+    Args:
+        query: Your search query (e.g., "GE Vernova recruiting team contact email")
+        max_results: Number of results to return (default: 10)
+
+    Returns:
+        List of search results with title, snippet, and url
+    """
+    from app.search.providers import SerperProvider
+
+    serper = SerperProvider()
+    results = serper.search(query, max_results=max_results)
+
+    return [
+        {
+            'title': r['title'],
+            'snippet': r['snippet'],
+            'url': r['url']
+        }
+        for r in results
+    ]
+
+
+@tool
+async def fetch_and_read_page(url: str) -> Dict[str, Any]:
+    """
+    Fetch and read content from a URL. Automatically extracts and SAVES any emails found.
+
+    Use this when search results show a promising page.
+
+    Args:
+        url: URL to fetch and read
+
+    Returns:
+        Dictionary with content, emails found, and save status
+    """
+    content = await fetch_page(url)
+
+    if not content:
+        return {
+            'success': False,
+            'error': 'Failed to fetch page',
+            'emails': [],
+            'content': ''
+        }
+
+    extracted = extract_emails(content, url)
+
+    # Debug logging
+    print(f"[fetch_and_read_page] Extracted {len(extracted)} emails from {url}")
+    
+    saved_count = 0
+    if extracted:
+        print(f"[fetch_and_read_page] Emails found: {[e.email for e in extracted]}")
+        
+        # AUTO-SAVE to database
+        try:
+            from app.models.contact import Contact, Evidence
+            
+            ctx = get_tool_context()
+            company = ctx.get('company')
+            db = ctx.get('db')
+            
+            if company and db:
+                for e in extracted:
+                    # Skip duplicates
+                    existing = db.query(Contact).filter(Contact.email == e.email).first()
+                    if existing:
+                        continue
+                    
+                    # Create contact
+                    contact = Contact(
+                        company_id=company.id,
+                        email=e.email,
+                        name=e.name,
+                        title=e.title,
+                        inferred=False,
+                        status='discovered'
+                    )
+                    db.add(contact)
+                    db.flush()
+                    
+                    # Add evidence
+                    evidence = Evidence(
+                        contact_id=contact.id,
+                        source_url=url,
+                        source_type='web_crawl',
+                        surrounding_text=e.surrounding_text[:500] if e.surrounding_text else ''
+                    )
+                    db.add(evidence)
+                    saved_count += 1
+                    print(f"[fetch_and_read_page] Auto-saved: {e.email}")
+                
+                db.commit()
+                print(f"[fetch_and_read_page] Saved {saved_count} contacts")
+        except Exception as ex:
+            print(f"[fetch_and_read_page] Auto-save error: {ex}")
+
+    return {
+        'success': True,
+        'url': url,
+        'content': content[:2000],
+        'emails': [e.email for e in extracted],
+        'saved_count': saved_count,
+        'message': f"Found and saved {saved_count} contacts" if saved_count > 0 else "No new contacts saved"
+    }
+
+
+
+@tool
+def save_discovered_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Save discovered contacts to database.
+
+    CRITICAL: Only save REAL emails you found on actual pages.
+    DO NOT save generated, guessed, or inferred emails.
+
+    Args:
+        contacts: List with email, name, title, source, url
+
+    Returns:
+        Summary of how many contacts were saved
+    """
+    from app.models.contact import Contact, Evidence
+    from app.research.prioritizer import calculate_contact_priority
+
+    ctx = get_tool_context()
+    company = ctx['company']
+    db = ctx['db']
+
+    if not company or not db:
+        return {'error': 'Tool context not set', 'saved': 0}
+
+    saved_count = 0
+    skipped_count = 0
+
+    for contact_data in contacts:
+        email = contact_data.get('email')
+        url = contact_data.get('url')
+
+        if not email or not url:
+            skipped_count += 1
+            continue
+
+        existing = db.query(Contact).filter(Contact.email == email).first()
+        if existing:
+            skipped_count += 1
+            continue
+
+        classification = calculate_contact_priority(
+            email,
+            contact_data.get('name'),
+            contact_data.get('title'),
+            contact_data.get('source', 'agent_research')
+        )
+
+        contact = Contact(
+            company_id=company.id,
+            email=email,
+            name=contact_data.get('name'),
+            title=contact_data.get('title'),
+            email_type=classification['email_type'],
+            priority=classification['priority'],
+            confidence=contact_data.get('confidence', classification['confidence']),
+            source_type=contact_data.get('source', 'agent_research'),
+            source_url=url,
+            inferred=False,
+            status='discovered'
+        )
+        db.add(contact)
+        db.flush()
+
+        evidence = Evidence(
+            contact_id=contact.id,
+            evidence_type='agent_discovery',
+            source_url=url,
+            source_type='langgraph_agent',
+            surrounding_text=contact_data.get('context', '')[:500],
+            confidence_contribution=classification['confidence']
+        )
+        db.add(evidence)
+
+        saved_count += 1
+        print(f"[Tool] Saved contact: {email} from {url}")
+
+    db.commit()
+
+    return {
+        'saved': saved_count,
+        'skipped': skipped_count,
+        'message': f'Saved {saved_count} new contacts, skipped {skipped_count}'
+    }
+
+
+_tool_context = {'company': None, 'db': None}
+
+def set_tool_context(company, db):
+    _tool_context['company'] = company
+    _tool_context['db'] = db
+
+def get_tool_context():
+    return _tool_context
+
+
+RESEARCH_TOOLS = [
+    web_search,
+    fetch_and_read_page,
+    save_discovered_contacts,
+]
+
+
+
+# === FILE: V:\discover\app\research\__init__.py ===
+
+"""
+Phase 2: Research - Agent-based contact discovery
+"""
+from .agent import research_company_contacts
+from .prioritizer import calculate_contact_priority
+
+__all__ = ['research_company_contacts', 'calculate_contact_priority']
+
+# === FILE: V:\discover\app\routes\api.py ===
+
+"""
+API routes for triggering pipeline via GitHub Actions
+"""
+from fastapi import APIRouter, Depends, HTTPException, Header, Form
+from sqlalchemy.orm import Session
+from datetime import datetime
+import os
+import httpx
+
+from app.db import get_db
+from app.models import Run
+
+router = APIRouter()
+
+def verify_api_key(x_api_key: str = Header(None)):
+    """Verify API key for triggering runs"""
+    expected_key = os.getenv('RUN_API_KEY')
+    if not expected_key:
+        # If no key set, allow (for development)
+        return True
+    
+    if x_api_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    return True
+
+@router.post("/run")
+async def trigger_run(
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_api_key)
+):
+    """
+    Trigger GitHub Actions workflow to run the pipeline
+    
+    This endpoint:
+    1. Creates a Run record in the database
+    2. Triggers GitHub Actions workflow via API
+    3. Returns immediately (async execution)
+    """
+    
+    try:
+        # Get GitHub config from environment
+        github_token = os.getenv('GITHUB_TOKEN')
+        github_repo = os.getenv('GITHUB_REPO')  # e.g., "username/repo-name"
+        
+        if not github_token or not github_repo:
+            raise HTTPException(
+                status_code=500,
+                detail="GitHub integration not configured. Set GITHUB_TOKEN and GITHUB_REPO."
+            )
+        
+        # Create new run record (will be picked up by workflow)
+        run = Run(
+            started_at=datetime.now(),
+            status='queued'
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        
+        # Trigger GitHub Actions workflow
+        workflow_url = f"https://api.github.com/repos/{github_repo}/actions/workflows/daily-run.yml/dispatches"
+        
+        headers = {
+            'Authorization': f'Bearer {github_token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
+        
+        payload = {
+            'ref': 'main',  # or 'master' depending on your default branch
+            'inputs': {
+                'max_jobs': '50'
+            }
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                workflow_url,
+                headers=headers,
+                json=payload,
+                timeout=10.0
+            )
+        
+        if response.status_code == 204:
+            # Success - workflow triggered
+            return {
+                "success": True,
+                "message": "Pipeline queued via GitHub Actions",
+                "run_id": run.id,
+                "status": "queued"
+            }
+        else:
+            # Failed to trigger
+            run.status = 'failed'
+            run.error_message = f"GitHub API error: {response.text}"
+            db.commit()
+            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to trigger workflow: {response.text}"
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering pipeline: {str(e)}"
+        )
+
+@router.get("/status/{run_id}")
+async def get_run_status(
+    run_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get status of a specific run"""
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "jobs_found": run.jobs_found,
+        "emails_sent": run.emails_sent,
+        "error_message": run.error_message
+    }
+
+@router.post("/run/{run_id}/cancel")
+async def cancel_run(
+    run_id: int,
+    save_work: bool = Form(False),
+    password: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Cancel a running pipeline
+    
+    Args:
+        run_id: ID of the run to cancel
+        save_work: If True, keep data discovered so far; if False, rollback
+        password: Dashboard password for authorization
+    """
+    
+    # Check password (if set)
+    expected_password = os.getenv('DASHBOARD_PASSWORD')
+    if expected_password and password != expected_password:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    if run.status not in ['running', 'queued']:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel run with status: {run.status}")
+    
+    if save_work:
+        # Mark as cancelled but keep data
+        run.status = 'cancelled'
+        run.completed_at = datetime.now()
+        run.error_message = "Cancelled by user (work saved)"
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Run cancelled, work saved",
+            "run_id": run.id,
+            "jobs_found": run.jobs_found
+        }
+    else:
+        # Rollback: Delete associated jobs and contacts
+        from app.models import Job
+        
+        # Delete jobs from this run
+        db.query(Job).filter(Job.run_id == run_id).delete()
+        
+        # Mark run as cancelled
+        run.status = 'cancelled'
+        run.completed_at = datetime.now()
+        run.error_message = "Cancelled by user (work discarded)"
+        run.jobs_found = 0
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Run cancelled, work discarded",
+            "run_id": run.id
+        }
+
+
+@router.get("/runs")
+async def list_runs(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_api_key)
+):
+    """List recent runs (Currently public - no API key required)"""
+    runs = db.query(Run).order_by(Run.started_at.desc()).limit(limit).all()
+    
+    return [{
+        "id": r.id,
+        "started_at": r.started_at,
+        "completed_at": r.completed_at,
+        "status": r.status,
+        "jobs_found": r.jobs_found,
+        "emails_sent": r.emails_sent
+    } for r in runs]
+
+@router.get("/runs/{run_id}")
+async def get_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_api_key)
+):
+    """Get run details (Currently public - no API key required)"""
+    run = db.query(Run).filter(Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    return {
+        "id": run.id,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "status": run.status,
+        "jobs_found": run.jobs_found,
+        "jobs_filtered": run.jobs_filtered,
+        "companies_eligible": run.companies_eligible,
+        "companies_contacted": run.companies_contacted,
+        "emails_queued": run.emails_queued,
+        "emails_sent": run.emails_sent,
+        "shortfall_reason": run.shortfall_reason,
+        "error_message": run.error_message
+    }
+
+# === FILE: V:\discover\app\routes\dashboard.py ===
+
+"""
+Dashboard routes
+"""
+from fastapi import APIRouter, Request, Form, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.models import Run, Job
+from app.models.contact import Contact
+from app.models.schedule import Schedule
+
+from app.models.outreach import Outreach
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+def check_password(password: str):
+    """
+    Check dashboard password (DISABLED - Currently public)
+    To enable: Set DASHBOARD_PASSWORD in .env and uncomment checks below
+    """
+    # expected = os.getenv('DASHBOARD_PAkiSSWORD')
+    # if not expected:
+    #     raise HTTPException(status_code=500, detail="DASHBOARD_PASSWORD not configured")
+    # return password == expected
+    return True  # Always allow for now
+
+@router.get("/", response_class=HTMLResponse)
+async def dashboard_home(request: Request, db: Session = Depends(get_db)):
+    """Dashboard home page"""
+    
+    # Get latest runs
+    runs = db.query(Run).order_by(Run.started_at.desc()).limit(5).all()
+    
+    # Get stats
+    total_jobs = db.query(Job).count()
+    total_contacts = db.query(Contact).count()
+    total_sent = db.query(Outreach).filter(Outreach.sent_at.isnot(None)).count()
+    
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "runs": runs,
+            "stats": {
+                "total_jobs": total_jobs,
+                "total_contacts": total_contacts,
+                "total_sent": total_sent
+            }
+        }
+    )
+
+@router.post("/run")
+async def trigger_run_from_dashboard(
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Trigger run from dashboard"""
+    if not check_password(password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    from app.routes.api import trigger_run
+    await trigger_run(db)
+
+
+@router.get("/schedules", response_class=HTMLResponse)
+async def view_schedules(request: Request, db: Session = Depends(get_db)):
+    """View and manage schedules"""
+    
+    schedules = db.query(Schedule).order_by(Schedule.created_at.desc()).all()
+    
+    return templates.TemplateResponse(
+        request=request,
+        name="schedules.html",
+        context={
+            "schedules": schedules
+        }
+    )
+
+@router.post("/schedules/create")
+async def create_schedule(
+    name: str = Form(...),
+    hour: int = Form(...),
+    minute: int = Form(...),
+    enabled: bool = Form(True),
+    max_jobs: int = Form(50),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Create a new schedule"""
+    
+    if not check_password(password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    # Convert IST to UTC for cron
+    # IST is UTC+5:30
+    utc_hour = (hour - 5) if minute >= 30 else (hour - 6)
+    utc_minute = (minute - 30) if minute >= 30 else (minute + 30)
+    
+    if utc_hour < 0:
+        utc_hour += 24
+    
+    cron = f"{utc_minute} {utc_hour} * * *"
+    
+    schedule = Schedule(
+        name=name,
+        cron_expression=cron,
+        timezone='Asia/Kolkata',
+        enabled=enabled,
+        max_jobs=max_jobs
+    )
+    
+    db.add(schedule)
+    db.commit()
+    
+    return RedirectResponse(url="/dashboard/schedules", status_code=303)
+
+@router.post("/schedules/{schedule_id}/toggle")
+async def toggle_schedule(
+    schedule_id: int,
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Enable/disable a schedule"""
+    
+    if not check_password(password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    schedule.enabled = not schedule.enabled
+    db.commit()
+    
+    return RedirectResponse(url="/dashboard/schedules", status_code=303)
+
+@router.post("/schedules/{schedule_id}/delete")
+async def delete_schedule(
+    schedule_id: int,
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Delete a schedule"""
+    
+    if not check_password(password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    db.delete(schedule)
+    db.commit()
+    
+    return RedirectResponse(url="/dashboard/schedules", status_code=303)
+
+    
+    return RedirectResponse(url="/dashboard", status_code=303)
+
+# === FILE: V:\discover\app\routes\tracking.py ===
+
+"""
+Email open tracking endpoint
+"""
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
+from datetime import datetime
+import io
+
+from app.db import get_db, hash_ip
+from app.models.outreach import Open
+from app.models.contact import Contact
+
+router = APIRouter()
+
+# 1x1 transparent tracking pixel
+TRACKING_PIXEL = bytes([
+    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
+    0x01, 0x00, 0x80, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
+    0x00, 0x00, 0x00, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44,
+    0x01, 0x00, 0x3B
+])
+
+@router.get("/open/{token}")
+async def track_open(token: str, request: Request):
+    """
+    Track email open event
+    Returns 1x1 transparent GIF
+    """
+    db = next(get_db())
+    
+    try:
+        # Find contact by tracking token
+        contact = db.query(Contact).filter(
+            Contact.tracking_token == token
+        ).first()
+        
+        if not contact:
+            # Return pixel even if token not found (don't leak info)
+            return StreamingResponse(io.BytesIO(TRACKING_PIXEL), media_type="image/gif")
+        
+        # Get user agent and IP
+        user_agent = request.headers.get('user-agent', '')
+        client_ip = request.client.host if request.client else ''
+        ip_hash = hash_ip(client_ip) if client_ip else None
+        
+        # Detect machine open (email scanners, etc.)
+        is_machine = detect_machine_open(user_agent)
+        
+        # Find associated outreach (most recent sent to this contact)
+        from app.models.outreach import Outreach
+        outreach = db.query(Outreach).filter(
+            Outreach.contact_id == contact.id
+        ).order_by(Outreach.sent_at.desc()).first()
+        
+        # Record open event
+        open_event = Open(
+            contact_id=contact.id,
+            outreach_id=outreach.id if outreach else None,
+            opened_at=datetime.now(),
+            user_agent=user_agent[:500] if user_agent else None,
+            ip_hash=ip_hash,
+            is_machine_open=is_machine
+        )
+        db.add(open_event)
+        db.commit()
+        
+        print(f"[Tracking] Open tracked for contact {contact.id} (machine={is_machine})")
+        
+    except Exception as e:
+        print(f"[Tracking] Error: {e}")
+    finally:
+        db.close()
+    
+    # Always return tracking pixel
+    return StreamingResponse(io.BytesIO(TRACKING_PIXEL), media_type="image/gif")
+
+def detect_machine_open(user_agent: str) -> bool:
+    """Detect if open is from email scanner/machine"""
+    if not user_agent:
+        return True
+    
+    ua_lower = user_agent.lower()
+    
+    # Known email scanners
+    machine_patterns = [
+        'bot', 'spider', 'crawler', 'scan', 'check',
+        'proofpoint', 'mimecast', 'barracuda', 'ironport',
+        'google image proxy', 'google-image-proxy', 'microsoft', 'outlook-android-sync'
+    ]
+    
+    for pattern in machine_patterns:
+        if pattern in ua_lower:
+            return True
+    
+    return False
+
+# === FILE: V:\discover\app\search\jobspy_scraper.py ===
+
+"""
+JobSpy integration for direct job scraping from LinkedIn, Naukri, Indeed, Glassdoor, ZipRecruiter
+"""
+import os
+import time
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
+
+class JobSpyScraper:
+    """
+    Scrape jobs from multiple sites with intelligent rate limiting
+    """
+
+    # Rate limit settings (requests per minute) - conservative for reliability
+    RATE_LIMITS = {
+        'linkedin': 30,      # 1 req per 2 sec
+        'naukri': 30,        # 1 req per 2 sec
+        'indeed': 120,       # No rate limit (best scraper)
+        'glassdoor': 20,     # 1 req per 3 sec (aggressive blocking)
+        'ziprecruiter': 30,  # 1 req per 2 sec
+    }
+
+    def __init__(self):
+        self.last_request_time = {}
+        self.retry_wait_time = 60  # Initial wait on 429
+
+    def scrape_jobs(
+        self,
+        search_term: str,
+        location: str,
+        sites: List[str] = ["linkedin", "naukri", "indeed", "glassdoor"],
+        results_wanted: int = 20,
+        hours_old: int = 168,  # 7 days
+        country: str = "India"
+    ) -> List[Dict[str, Any]]:
+        """
+        Scrape jobs from multiple sites with rate limiting
+
+        Args:
+            search_term: Job search query (e.g., "GenAI engineer")
+            location: Job location
+            sites: List of sites to scrape
+            results_wanted: Max results per site
+            hours_old: Filter jobs posted within N hours (default: 7 days)
+            country: Country for Indeed
+
+        Returns:
+            List of job dictionaries
+        """
+        from jobspy import scrape_jobs as jobspy_scrape
+
+        print(f"[JobSpy] Scraping {', '.join(sites)}")
+        print(f"[JobSpy] Query: '{search_term}' in {location}")
+        print(f"[JobSpy] Results wanted: {results_wanted} per site, within {hours_old}h")
+
+        # Apply rate limiting before request
+        self._wait_for_rate_limit(sites)
+
+        # Try scraping with retries
+        for attempt in range(3):
+            try:
+                jobs_df = jobspy_scrape(
+                    site_name=sites,
+                    search_term=search_term,
+                    location=location,
+                    results_wanted=results_wanted,
+                    hours_old=hours_old,
+                    country_indeed=country,
+                )
+
+                if jobs_df is None or jobs_df.empty:
+                    print("[JobSpy] No jobs found")
+                    return []
+
+                print(f"[JobSpy] âœ“ Found {len(jobs_df)} jobs")
+
+                # Convert to list of dicts
+                jobs = self._convert_to_jobs(jobs_df)
+                return jobs
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for rate limiting (429)
+                if '429' in error_str or 'rate limit' in error_str.lower():
+                    wait_time = self.retry_wait_time * (2 ** attempt)  # Exponential backoff
+                    print(f"[JobSpy] âš  Rate limited (429). Waiting {wait_time}s before retry {attempt+1}/3")
+                    time.sleep(wait_time)
+                    continue
+
+                # Other errors
+                print(f"[JobSpy] âœ— Error on attempt {attempt+1}/3: {e}")
+
+                if attempt < 2:
+                    time.sleep(10)  # Short wait before retry
+                    continue
+                else:
+                    print("[JobSpy] Max retries reached, skipping this search")
+                    return []
+
+        return []
+
+    def _wait_for_rate_limit(self, sites: List[str]):
+        """Apply rate limiting delays"""
+        # Find the most restrictive rate limit
+        min_delay = 0
+        for site in sites:
+            if site in self.RATE_LIMITS:
+                rpm = self.RATE_LIMITS[site]
+                delay = 60.0 / rpm  # Seconds between requests
+                min_delay = max(min_delay, delay)
+
+        # Check if we need to wait
+        for site in sites:
+            if site in self.last_request_time:
+                elapsed = time.time() - self.last_request_time[site]
+                if elapsed < min_delay:
+                    wait = min_delay - elapsed
+                    print(f"[JobSpy] Rate limiting: waiting {wait:.1f}s for {site}")
+                    time.sleep(wait)
+
+        # Update last request time
+        current_time = time.time()
+        for site in sites:
+            self.last_request_time[site] = current_time
+
+    def _convert_to_jobs(self, jobs_df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Convert DataFrame to list of job dicts"""
+        jobs = []
+
+        for _, row in jobs_df.iterrows():
+            # Format salary
+            salary = self._format_salary(row)
+
+            # Convert date_posted to date object
+            date_posted = None
+            if pd.notna(row.get('date_posted')):
+                try:
+                    date_posted = pd.to_datetime(row.get('date_posted')).date()
+                except Exception:
+                    pass
+
+            job = {
+                'site': row.get('site'),
+                'title': row.get('title'),
+                'company': row.get('company'),
+                'location': row.get('location'),
+                'date_posted': date_posted,
+                'job_url': row.get('job_url'),
+                'job_url_direct': row.get('job_url_direct'),
+                'description': row.get('description'),
+                'job_type': row.get('job_type'),  # fulltime, parttime, etc.
+                'salary': salary,
+                'is_remote': bool(row.get('is_remote')) if pd.notna(row.get('is_remote')) else False,
+                'company_url': row.get('company_url'),
+                'company_industry': row.get('company_industry'),
+            }
+
+            jobs.append(job)
+
+        return jobs
+
+    def _format_salary(self, row) -> Optional[str]:
+        """Format salary info from row"""
+        try:
+            if pd.isna(row.get('min_amount')) and pd.isna(row.get('max_amount')):
+                return None
+
+            min_amt = row.get('min_amount')
+            max_amt = row.get('max_amount')
+            currency = row.get('currency', 'â‚¹')
+            interval = row.get('interval', 'yearly')
+
+            if pd.notna(min_amt) and pd.notna(max_amt):
+                return f"{currency}{int(min_amt)}-{int(max_amt)}/{interval}"
+            elif pd.notna(min_amt):
+                return f"{currency}{int(min_amt)}+/{interval}"
+            elif pd.notna(max_amt):
+                return f"Up to {currency}{int(max_amt)}/{interval}"
+
+            return None
+        except Exception:
+            return None
+
+
+def build_jobspy_searches() -> List[Dict[str, Any]]:
+    """
+    Build JobSpy search configurations for Remote + Chennai
+
+    Returns:
+        List of search configuration dicts
+    """
+    from app.config import get_keywords
+    keywords = get_keywords()
+
+    searches = []
+    roles = keywords['roles'][:5]  # Top 5 roles
+
+    # Get sites from environment (default: linkedin, indeed, naukri, glassdoor)
+    sites_str = os.getenv('JOBSPY_SITES', 'linkedin,indeed,naukri,glassdoor')
+    sites = [s.strip() for s in sites_str.split(',') if s.strip()]
+
+    print(f"[JobSpy] Using sites: {', '.join(sites)}")
+
+    # Chennai jobs (top 3 roles)
+    for role in roles[:3]:
+        searches.append({
+            'search_term': role,
+            'location': 'Chennai, Tamil Nadu, India',
+            'sites': sites,
+            'results_wanted': int(os.getenv('JOBSPY_RESULTS_PER_SITE', '25')),
+            'hours_old': int(os.getenv('JOBSPY_HOURS_OLD', '168')),
+        })
+
+    # Remote jobs (top 3 roles)
+    for role in roles[:3]:
+        searches.append({
+            'search_term': f"{role} remote",
+            'location': 'India',
+            'sites': sites,
+            'results_wanted': int(os.getenv('JOBSPY_RESULTS_PER_SITE', '25')),
+            'hours_old': int(os.getenv('JOBSPY_HOURS_OLD', '168')),
+        })
+
+    return searches
+
+
+# === FILE: V:\discover\app\search\providers.py ===
+
+"""
+Search providers and router
+"""
+import requests
+from bs4 import BeautifulSoup
+from typing import List
+
+class SearchResult:
+    """Search result data class"""
+    def __init__(self, title: str, url: str, snippet: str, date: str = None):
+        self.title = title
+        self.url = url
+        self.snippet = snippet
+        self.date = date
+    
+    def to_dict(self):
+        return {
+            'title': self.title,
+            'url': self.url,
+            'snippet': self.snippet,
+            'date': self.date
+        }
+
+class SearchError(Exception):
+    """Search provider error"""
+    def __init__(self, message: str, provider: str, is_quota_error: bool = False):
+        super().__init__(message)
+        self.provider = provider
+        self.is_quota_error = is_quota_error
+
+class DuckDuckGoSearch:
+    """DuckDuckGo HTML search (free, unlimited)"""
+    
+    name = 'duckduckgo'
+    
+    def search(self, query: str, max_results: int = 10, date_filter: str = None) -> List[SearchResult]:
+        """
+        Search DuckDuckGo
+        date_filter: 'd' for day, 'w' for week, 'm' for month
+        """
+        url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+        
+        if date_filter:
+            url += f"&df={date_filter}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results = []
+            
+            for result_div in soup.find_all('div', class_='result', limit=max_results):
+                title_elem = result_div.find('a', class_='result__a')
+                snippet_elem = result_div.find('a', class_='result__snippet')
+                
+                if not title_elem:
+                    continue
+                
+                title = title_elem.get_text(strip=True)
+                result_url = title_elem.get('href', '')
+                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ''
+                
+                # Extract actual URL from DuckDuckGo redirect
+                if '//duckduckgo.com/l/?' in result_url:
+                    import re
+                    match = re.search(r'uddg=([^&]+)', result_url)
+                    if match:
+                        result_url = requests.utils.unquote(match.group(1))
+                
+                if title and result_url and snippet:
+                    results.append(SearchResult(title, result_url, snippet))
+                
+                if len(results) >= max_results:
+                    break
+            
+            return results
+            
+        except Exception as e:
+            raise SearchError(f"DuckDuckGo search failed: {str(e)}", 'duckduckgo')
+
+class SerperSearch:
+    """Serper.dev Google Search API"""
+    
+    name = 'serper'
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+    
+    def search(self, query: str, max_results: int = 10, date_filter: str = None) -> List[SearchResult]:
+        """Search using Serper API"""
+        
+        payload = {
+            'q': query,
+            'num': max_results,
+            'gl': 'in'  # India
+        }
+        
+        if date_filter:
+            # Map to Google's date filter format
+            mapping = {'d': 'qdr:d', 'w': 'qdr:w', 'm': 'qdr:m'}
+            payload['tbs'] = mapping.get(date_filter, 'qdr:d2')
+        
+        headers = {
+            'X-API-KEY': self.api_key,
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            response = requests.post(
+                'https://google.serper.dev/search',
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            results = []
+            
+            for item in data.get('organic', []):
+                results.append(SearchResult(
+                    title=item.get('title', ''),
+                    url=item.get('link', ''),
+                    snippet=item.get('snippet', ''),
+                    date=item.get('date')
+                ))
+            
+            return results
+            
+        except requests.exceptions.HTTPError as e:
+            is_quota = e.response.status_code == 429
+            raise SearchError(f"Serper search failed: {str(e)}", 'serper', is_quota)
+        except Exception as e:
+            raise SearchError(f"Serper search failed: {str(e)}", 'serper')
+
+
+class FirecrawlSearch:
+    """Firecrawl Search API"""
+    
+    name = 'firecrawl'
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+    
+    def search(self, query: str, max_results: int = 10, date_filter: str = None) -> List[SearchResult]:
+        """Search using Firecrawl API"""
+        
+        payload = {
+            'query': query,
+            'limit': max_results
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            response = requests.post(
+                'https://api.firecrawl.dev/v1/search',
+                json=payload,
+                headers=headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            results = []
+            
+            # Firecrawl returns results in 'data' array
+            for item in data.get('data', [])[:max_results]:
+                results.append(SearchResult(
+                    title=item.get('title', ''),
+                    url=item.get('url', ''),
+                    snippet=item.get('description', ''),
+                    date=None
+                ))
+            
+            return results
+            
+        except requests.exceptions.HTTPError as e:
+            is_quota = e.response.status_code == 429
+            raise SearchError(f"Firecrawl search failed: {str(e)}", 'firecrawl', is_quota)
+        except Exception as e:
+            raise SearchError(f"Firecrawl search failed: {str(e)}", 'firecrawl')
+
+
+# === FILE: V:\discover\app\search\router.py ===
+
+"""
+Search router with caching and failover
+"""
+import hashlib
+import json
+import os
+from datetime import datetime, timedelta
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from app.search.providers import (
+    DuckDuckGoSearch, SerperSearch, FirecrawlSearch, SearchResult, SearchError
+)
+from app.models.outreach import CacheSearch
+
+class SearchRouter:
+    """Routes searches through providers with caching and failover"""
+    
+    def __init__(self, db: Session, cache_enabled: bool = True):
+        self.db = db
+        self.cache_enabled = cache_enabled
+        self.providers = []
+        
+        # Get configuration from environment
+        search_provider = os.getenv('SEARCH_PROVIDER', 'serper').lower()  # serper or firecrawl
+        serper_key = os.getenv('SERPER_API_KEY')
+        firecrawl_key = os.getenv('FIRECRAWL_API_KEY')
+        
+        # Setup providers based on configuration
+        if search_provider == 'firecrawl':
+            # Firecrawl as primary, Serper as fallback
+            if firecrawl_key:
+                self.providers.append(FirecrawlSearch(firecrawl_key))
+                print("[SearchRouter] Primary: Firecrawl")
+            if serper_key:
+                self.providers.append(SerperSearch(serper_key))
+                print("[SearchRouter] Fallback: Serper")
+        else:
+            # Serper as primary (default), Firecrawl as fallback
+            if serper_key:
+                self.providers.append(SerperSearch(serper_key))
+                print("[SearchRouter] Primary: Serper")
+            if firecrawl_key:
+                self.providers.append(FirecrawlSearch(firecrawl_key))
+                print("[SearchRouter] Fallback: Firecrawl")
+        
+        # Always add DuckDuckGo as final fallback (free, unlimited)
+        self.providers.append(DuckDuckGoSearch())
+        print("[SearchRouter] Final fallback: DuckDuckGo")
+
+    
+    def search(self, query: str, max_results: int = 10, date_filter: str = None) -> List[SearchResult]:
+        """
+        Search with caching and failover
+        date_filter: 'd' for day, 'w' for week, 'm' for month
+        """
+        # Check cache first
+        if self.cache_enabled:
+            cached = self._get_from_cache(query, max_results, date_filter)
+            if cached:
+                print(f"[SearchRouter] Cache hit for: {query[:50]}...")
+                return cached
+        
+        # Try each provider with failover
+        errors = []
+        
+        for provider in self.providers:
+            try:
+                print(f"[SearchRouter] Trying {provider.name} for: {query[:50]}...")
+                results = provider.search(query, max_results, date_filter)
+                
+                # Cache successful results
+                if self.cache_enabled and results:
+                    self._save_to_cache(query, max_results, date_filter, results)
+                
+                print(f"[SearchRouter] {provider.name} returned {len(results)} results")
+                return results
+                
+            except SearchError as e:
+                errors.append(e)
+                print(f"[SearchRouter] {provider.name} failed: {e}")
+                
+                # Skip to next provider on quota error
+                if e.is_quota_error:
+                    continue
+                
+                # Also try next provider on other errors
+                continue
+        
+        # All providers failed
+        error_msg = "All search providers failed:\n" + "\n".join(
+            f"{e.provider}: {str(e)}" for e in errors
+        )
+        raise Exception(error_msg)
+    
+    def _get_from_cache(self, query: str, max_results: int, date_filter: Optional[str]) -> Optional[List[SearchResult]]:
+        """Get results from cache"""
+        query_hash = self._hash_query(query, max_results, date_filter)
+        
+        cache_entry = self.db.query(CacheSearch).filter(
+            CacheSearch.query_hash == query_hash,
+            CacheSearch.expires_at > datetime.now()
+        ).first()
+        
+        if cache_entry:
+            results_data = json.loads(cache_entry.results)
+            return [SearchResult(**r) for r in results_data]
+        
+        return None
+    
+    def _save_to_cache(self, query: str, max_results: int, date_filter: Optional[str], results: List[SearchResult]):
+        """Save results to cache"""
+        query_hash = self._hash_query(query, max_results, date_filter)
+        expires_at = datetime.now() + timedelta(hours=24)
+        
+        results_json = json.dumps([r.to_dict() for r in results])
+        
+        cache_entry = self.db.query(CacheSearch).filter(
+            CacheSearch.query_hash == query_hash
+        ).first()
+        
+        if cache_entry:
+            cache_entry.results = results_json
+            cache_entry.expires_at = expires_at
+        else:
+            cache_entry = CacheSearch(
+                query_hash=query_hash,
+                results=results_json,
+                expires_at=expires_at
+            )
+            self.db.add(cache_entry)
+        
+        self.db.commit()
+    
+    def _hash_query(self, query: str, max_results: int, date_filter: Optional[str]) -> str:
+        """Hash query parameters for cache key"""
+        key = json.dumps({
+            'query': query,
+            'max_results': max_results,
+            'date_filter': date_filter
+        })
+        return hashlib.sha256(key.encode()).hexdigest()
+
+def build_job_queries() -> List[str]:
+    """Build search queries for job discovery"""
+    from app.config import get_keywords
+    keywords = get_keywords()
+    
+    queries = []
+    roles = keywords['roles'][:3]  # Top 3 roles
+    
+    # Chennai queries
+    for role in roles:
+        queries.append(f'site:naukri.com "{role}" Chennai')
+        queries.append(f'site:linkedin.com/jobs "{role}" Chennai')
+    
+    # Remote queries  
+    for role in roles:
+        queries.append(f'site:naukri.com "{role}" remote')
+        queries.append(f'site:linkedin.com/jobs "{role}" remote')
+    
+    # LinkedIn recruiter posts (best for finding emails)
+    queries.append('site:linkedin.com/posts "hiring" "AI engineer" Chennai "@"')
+    queries.append('site:linkedin.com/posts "hiring" "GenAI" remote "@"')
+    
+    return queries
+
+def build_contact_queries(company_name: str, domain: str) -> List[str]:
+    """Build contact discovery queries for a company"""
+    queries = []
+    
+    queries.append(f'"{company_name}" recruiter "@{domain}"')
+    queries.append(f'"{company_name}" "talent acquisition" "@{domain}"')
+    queries.append(f'site:{domain} careers contact')
+    queries.append(f'site:{domain} jobs apply email')
+    queries.append(f'site:linkedin.com/posts "{company_name}" hiring "@"')
+    
+    return queries
+
+# === FILE: V:\discover\app\templates\emails\templates.py ===
+
+"""
+Email templates for outreach
+Template selection based on job experience requirement
+"""
+
+TEMPLATE_A_STANDARD = """Hi,
+
+I'm a GenAI Engineer with 2 years of hands-on experience in LLM applications, prompt engineering, and AI agent development. I came across {company}'s work and am interested in opportunities there.
+
+I specialize in:
+- Building production LLM systems (RAG, function calling, agentic workflows)
+- Prompt engineering and optimization
+- Python, LangChain, FastAPI, LangGraph
+- AWS Bedrock, Claude, OpenAI APIs
+
+I'm looking for roles where I can contribute to impactful AI products and continue growing in this space. Would love to discuss opportunities at {company}.
+
+My resume is attached. Looking forward to hearing from you.
+
+Best regards,
+[Your Name]
+"""
+
+TEMPLATE_B_MISMATCH = """Hi,
+
+I noticed {company}'s GenAI Engineer opening mentions {experience_required}+ years of experience. While I have 2 years in the field, I've worked extensively on production-grade LLM systems and believe my hands-on skills align closely with what you need.
+
+In my 2 years, I've:
+- Built and deployed multiple LLM applications from scratch
+- Designed agentic workflows with LangGraph and Claude
+- Optimized prompt engineering for 40% cost reduction
+- Worked with RAG systems, function calling, and embeddings
+
+The GenAI field is relatively new, and I've spent these 2 years deeply focused on building real-world applications rather than tangential work. I'm confident I can deliver value from day one.
+
+Would appreciate the opportunity to discuss how my experience maps to your needs.
+
+Resume attached. Happy to chat.
+
+Best regards,
+[Your Name]
+"""
+
+
+def get_template(experience_required: int = None) -> tuple[str, str]:
+    """
+    Get email template based on experience requirement
+    
+    Args:
+        experience_required: Years of experience required by job
+    
+    Returns:
+        (subject, body_template)
+    """
+    if experience_required and experience_required >= 4:
+        return (
+            "GenAI Engineer - Strong 2-Year Track Record",
+            TEMPLATE_B_MISMATCH
+        )
+    else:
+        return (
+            "GenAI Engineer - 2 Years Experience",
+            TEMPLATE_A_STANDARD
+        )
+
+# === FILE: V:\discover\app\templates\dashboard.html ===
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Job Outreach Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-purple-600 to-blue-600 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="bg-white rounded-lg shadow-xl p-6 mb-6">
+            <h1 class="text-3xl font-bold">ðŸŽ¯ Job Outreach Dashboard</h1>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Total Jobs</p>
+                <p class="text-4xl font-bold">{{ stats.total_jobs }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Contacts</p>
+                <p class="text-4xl font-bold">{{ stats.total_contacts }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Emails Sent</p>
+                <p class="text-4xl font-bold">{{ stats.total_sent }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Open Rate</p>
+                <p class="text-4xl font-bold">{{ stats.open_rate }}%</p>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4">ðŸš€ Run Pipeline</h2>
+            <form method="POST" action="/dashboard/run" class="flex gap-3">
+                <input type="password" name="password" placeholder="Enter password" required
+                       class="flex-1 px-4 py-2 border-2 border-gray-300 rounded focus:border-indigo-500 focus:outline-none">
+                <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-700">
+                    Run Now
+                </button>
+            </form>
+        </div>
+        
+        <div class="bg-white rounded-lg overflow-hidden">
+            <div class="p-6 border-b">
+                <h2 class="text-xl font-bold">ðŸ“Š Recent Runs</h2>
+            </div>
+            {% if runs %}
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">ID</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Started</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Jobs</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Emails</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for run in runs %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 font-bold">#{{ run.id }}</td>
+                        <td class="px-6 py-4 text-sm">{{ run.started_at.strftime('%b %d, %H:%M') }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-3 py-1 rounded-full text-xs font-semibold
+                                {% if run.status == 'completed' %}bg-green-100 text-green-800
+                                {% elif run.status == 'running' %}bg-yellow-100 text-yellow-800
+                                {% elif run.status == 'failed' %}bg-red-100 text-red-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ run.status.upper() }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">{{ run.jobs_found }}</td>
+                        <td class="px-6 py-4">{{ run.emails_sent }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="text-center py-12">
+                <p class="text-gray-500">No runs yet. Click "Run Now" to start!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+
+# === FILE: V:\discover\app\templates\schedules.html ===
+
+<!DOCTYPE html>
+<html>
+<head><title>Schedules</title></head>
+<body>
+<h1>Schedule Management</h1>
+<a href="/dashboard">Back</a>
+<h2>Add Schedule</h2>
+<form method="POST" action="/dashboard/schedules/create">
+<input name="name" placeholder="Name" required><br>
+<input name="hour" type="number" min="0" max="23" value="8" required> : <input name="minute" type="number" min="0" max="59" value="30" required><br>
+<input name="max_jobs" type="number" value="50"><br>
+<input type="checkbox" name="enabled" checked> Enabled<br>
+<input name="password" type="password" required><br>
+<button>Create</button>
+</form>
+<h2>Active Schedules</h2>
+<table>
+{% for schedule in schedules %}
+<tr>
+<td>{{ schedule.name }}</td>
+<td>{{ schedule.cron_expression }}</td>
+<td>{{ schedule.enabled }}</td>
+<td>
+<form method="POST" action="/dashboard/schedules/{{ schedule.id }}/toggle">
+<input name="password" type="password" required>
+<button>Toggle</button>
+</form>
+<form method="POST" action="/dashboard/schedules/{{ schedule.id }}/delete">
+<input name="password" type="password" required>
+<button>Delete</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</table>
+</body>
+</html>
+
+# === FILE: V:\discover\app\cli.py ===
+
+"""
+CLI entrypoint for 3-phase pipeline execution
+"""
+import asyncio
+import os
+import sys
+import time
+from datetime import datetime
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import Run, Company
+
+
+async def run_phase1_discovery(run_id: int, db: Session):
+    """Phase 1: Job Discovery"""
+    from app.pipeline.runner import run_pipeline
+    
+    print("\n" + "=" * 60)
+    print("PHASE 1: JOB DISCOVERY")
+    print("=" * 60)
+    
+    start = time.time()
+    result = await run_pipeline(run_id, db)
+    elapsed = time.time() - start
+    
+    print(f"âœ“ Completed in {elapsed:.1f}s")
+    print(f"  Jobs found: {result['jobs_found']}")
+    print(f"  Companies discovered: {db.query(Company).filter(Company.research_status=='pending').count()}")
+    
+    return result
+
+
+async def run_phase2_research(run_id: int, db: Session, limit: int = None):
+    """Phase 2: Research Contacts with Parallel Processing"""
+    from app.research.agent import research_company_contacts
+    
+    # Get configuration from environment
+    if limit is None:
+        limit = int(os.getenv('RESEARCH_COMPANY_LIMIT', '50'))
+    workers = int(os.getenv('RESEARCH_PARALLEL_WORKERS', '3'))
+    
+    print("\n" + "=" * 60)
+    print(f"PHASE 2: CONTACT RESEARCH (PARALLEL - {workers} workers)")
+    print("=" * 60)
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    run.phase = 'research'
+    db.commit()
+    
+    companies = db.query(Company).filter(
+        Company.research_status == 'pending'
+    ).limit(limit).all()
+    
+    print(f"Researching {len(companies)} companies with {workers} concurrent workers...")
+    print("(Rate limited to prevent system overload)")
+    
+    start = time.time()
+    
+    # Semaphore to limit concurrent research tasks
+    # GitHub Actions: 2 cores, 7GB RAM
+    # Configurable via RESEARCH_PARALLEL_WORKERS (2-5 recommended)
+    semaphore = asyncio.Semaphore(workers)
+    
+    async def research_with_limit(company, index):
+        """Research company with semaphore rate limiting"""
+        async with semaphore:
+            print(f"\n[{index}/{len(companies)}] {company.name}")
+            try:
+                result = await research_company_contacts(company.name, db)
+                
+                if result['success']:
+                    print(f"  âœ“ Found {result['total_contacts']} contacts ({len(result['personal_contacts'])} personal)")
+                else:
+                    print(f"  âœ— Failed: {result.get('error', 'Unknown error')}")
+                
+                return result
+            except Exception as e:
+                print(f"  âœ— Error: {e}")
+                return {
+                    'company': company.name,
+                    'success': False,
+                    'error': str(e),
+                    'personal_contacts': [],
+                    'fallback_contacts': [],
+                    'total_contacts': 0
+                }
+    
+    # Create tasks for all companies
+    tasks = [research_with_limit(company, i+1) for i, company in enumerate(companies)]
+    
+    # Execute with asyncio.gather (handles exceptions gracefully)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Filter out exceptions and count results
+    valid_results = [r for r in results if isinstance(r, dict)]
+    
+    elapsed = time.time() - start
+    
+    total_contacts = sum(r.get('total_contacts', 0) for r in valid_results)
+    personal_contacts = sum(len(r.get('personal_contacts', [])) for r in valid_results)
+    successful = sum(1 for r in valid_results if r.get('success', False))
+    
+    run.companies_researched = len(companies)
+    run.contacts_found = total_contacts
+    run.personal_contacts_found = personal_contacts
+    db.commit()
+    
+    print(f"\nâœ“ Completed in {elapsed:.1f}s")
+    print(f"  Companies researched: {len(companies)} ({successful} successful)")
+    print(f"  Contacts found: {total_contacts} ({personal_contacts} personal)")
+    if len(companies) > 0:
+        print(f"  Average time per company: {elapsed/len(companies):.1f}s")
+    
+    return valid_results
+
+
+async def run_phase3_outreach(run_id: int, db: Session, limit: int = 50):
+    """Phase 3: Send Outreach Emails"""
+    print("\n" + "=" * 60)
+    print("PHASE 3: OUTREACH")
+    print("=" * 60)
+    print("NOTE: Outreach not implemented yet")
+    print("      Contacts are ready in database")
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    run.phase = 'outreach'
+    db.commit()
+    
+    # TODO: Implement email sending
+    return {'sent': 0}
+
+
+async def run_command():
+    """Execute full 3-phase pipeline"""
+    
+    print("=" * 60)
+    print("ðŸš€ 3-PHASE JOB OUTREACH PIPELINE")
+    print("=" * 60)
+    
+    db: Session = SessionLocal()
+    
+    try:
+        # Create run
+        run = Run(status='running', phase='discovery')
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        
+        print(f"\nðŸ“Š Run ID: {run.id}")
+        print(f"â° Started: {run.started_at}")
+        
+        # Phase 1: Discovery
+        phase1 = await run_phase1_discovery(run.id, db)
+        
+        # Phase 2: Research (configured via RESEARCH_COMPANY_LIMIT env var)
+        phase2 = await run_phase2_research(run.id, db)
+        
+        # Phase 3: Outreach
+        phase3 = await run_phase3_outreach(run.id, db, limit=25)
+        
+        # Complete
+        run.status = 'completed'
+        run.completed_at = datetime.now()
+        db.commit()
+        
+        print("\n" + "=" * 60)
+        print("âœ… PIPELINE COMPLETED")
+        print("=" * 60)
+        print(f"Phase 1: {phase1['jobs_found']} jobs discovered")
+        print(f"Phase 2: {run.companies_researched} companies researched")
+        print(f"         {run.contacts_found} contacts found ({run.personal_contacts_found} personal)")
+        print(f"Phase 3: {phase3['sent']} emails sent (TODO)")
+        print()
+        
+        return 0
+        
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("âŒ PIPELINE FAILED")
+        print("=" * 60)
+        print(f"Error: {e}")
+        
+        import traceback
+        traceback.print_exc()
+        
+        if 'run' in locals():
+            run.status = 'failed'
+            run.error_message = str(e)
+            run.completed_at = datetime.now()
+            db.commit()
+        
+        return 1
+        
+    finally:
+        db.close()
+
+def main():
+    """Main CLI entry point"""
+    
+    if len(sys.argv) < 2:
+        print("Usage: python -m app.cli <command>")
+        print()
+        print("Commands:")
+        print("  run    - Execute the outreach pipeline")
+        sys.exit(1)
+    
+    command = sys.argv[1]
+    
+    if command == 'run':
+        exit_code = asyncio.run(run_command())
+        sys.exit(exit_code)
+    else:
+        print(f"Unknown command: {command}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
+
+# === FILE: V:\discover\app\config.py ===
+
+"""
+Configuration management
+"""
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+
+_cache: Dict[str, Any] = {}
+
+def load_config(filename: str) -> Dict[str, Any]:
+    """Load YAML config file with caching"""
+    if filename in _cache:
+        return _cache[filename]
+
+    config_path = Path(__file__).parent.parent / 'config' / filename
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    _cache[filename] = config
+    return config
+
+def get_keywords() -> Dict[str, Any]:
+    """Get keywords configuration"""
+    return load_config('keywords.yaml')
+
+def get_budgets() -> Dict[str, Any]:
+    """Get budgets configuration"""
+    return load_config('budgets.yaml')
+
+def get_profile() -> Dict[str, Any]:
+    """Get user profile configuration"""
+    return load_config('profile.yaml')
+
+def matches_location(location: str) -> tuple[bool, str]:
+    """
+    Check if location matches Chennai or Remote (India)
+    Returns: (matches, reason if not matched)
+    """
+    if not location:
+        return False, "No location provided"
+
+    keywords = get_keywords()
+    location_lower = location.lower()
+
+    # Check exclusions first
+    for exclude in keywords['locations']['exclude_patterns']:
+        if exclude.lower() in location_lower:
+            return (False, f"Excluded: {exclude}")
+
+    # Check Chennai
+    for chennai in keywords['locations']['chennai']:
+        if chennai.lower() in location_lower:
+            return (True, "")
+
+    # Check remote
+    for remote in keywords['locations']['remote']:
+        if remote.lower() in location_lower:
+            return (True, "")
+
+    return (False, "Not Chennai or Remote (India)")
+
+def calculate_fit_score(job_title: str, job_text: str = "") -> int:
+    """
+    Calculate job fit score 0-100
+    """
+    if not job_title:
+        return 0
+
+    profile = get_profile()
+    keywords = get_keywords()
+
+    title_lower = job_title.lower()
+    text_lower = (job_text or "").lower()
+    combined = f"{title_lower} {text_lower}"
+
+    score = 0
+
+    # Primary keywords (5 points each, max 40)
+    for keyword in keywords['keywords']['primary'][:8]:
+        if keyword.lower() in combined:
+            score += 5
+            if score >= 40:
+                break
+
+    # Secondary keywords (2 points each, max 20)
+    secondary_score = 0
+    for keyword in keywords['keywords']['secondary'][:10]:
+        if keyword.lower() in combined:
+            secondary_score += 2
+            if secondary_score >= 20:
+                break
+    score += secondary_score
+
+    # User skills (3 points each, max 30)
+    skill_score = 0
+    for skill in profile['skills'][:10]:
+        if skill.lower() in combined:
+            skill_score += 3
+            if skill_score >= 30:
+                break
+    score += skill_score
+
+    # Check exclusions (-20 each)
+    for exclusion in keywords['exclusions']:
+        if exclusion.lower() in combined:
+            score -= 20
+
+    return max(0, min(100, score))
+
+def select_resume_variant(job_title: str) -> str:
+    """
+    Select appropriate resume variant based on job title
+    """
+    profile = get_profile()
+    title_lower = job_title.lower()
+
+    mapping = profile.get('resume_mapping', {})
+    for variant, keywords_list in mapping.items():
+        for keyword in keywords_list:
+            if keyword.lower() in title_lower:
+                return profile['resume_variants'].get(variant,
+                                                       profile['resume_variants']['default'])
+
+    return profile['resume_variants']['default']
+
+# === FILE: V:\discover\app\db.py ===
+
+"""
+Database connection and utilities
+"""
+import os
+import hashlib
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+if not DATABASE_URL:
+    raise ValueError('DATABASE_URL must be set in environment variables')
+
+# Fix DATABASE_URL format for SQLAlchemy 2.x (postgres:// -> postgresql://)
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+engine = create_engine(DATABASE_URL, pool_size=10, max_overflow=20)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    """Get database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def hash_email(email: str) -> str:
+    """Hash email for privacy (suppression list)"""
+    return hashlib.sha256(email.lower().encode()).hexdigest()
+
+def hash_ip(ip: str) -> str:
+    """Hash IP address with salt"""
+    salt = os.getenv('IP_HASH_SALT', 'default-salt-change-me')
+    return hashlib.sha256((ip + salt).encode()).hexdigest()
+
+# === FILE: V:\discover\app\main.py ===
+
+"""
+Main FastAPI application
+"""
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+from app.db import get_db, Base, engine
+from app.routes import api, dashboard, tracking
+
+load_dotenv()
+
+app = FastAPI(
+    title="Job Outreach Automation",
+    description="Automated job discovery and outreach system",
+    version="1.0.0"
+)
+
+# Mount routes
+app.include_router(api.router, prefix="/api", tags=["api"])
+app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+app.include_router(tracking.router, prefix="/track", tags=["tracking"])
+
+# Create tables on startup (with error handling)
+@app.on_event("startup")
+async def startup():
+    """Initialize database tables on startup"""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("âœ“ Database tables created successfully")
+    except Exception as e:
+        print(f"âš  Warning: Could not connect to database on startup: {e}")
+        print("  The application will start, but database operations will fail.")
+
+# Health check
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Job Outreach Automation API"}
+
+@app.get("/health")
+async def health_check(db: Session = Depends(get_db)):
+    """Health check with database connection test"""
+    try:
+        db.execute("SELECT 1")
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

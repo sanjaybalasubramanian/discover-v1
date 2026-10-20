@@ -1,0 +1,33 @@
+# Ruff configuration for job-outreach-pipeline
+# Docs: https://docs.astral.sh/ruff/
+
+[lint]
+# Enable error (E), Pyflakes (F), and formatting rules
+select = ["E", "F", "W", "I"]
+
+# Ignore long lines (handled by formatter)
+ignore = ["E501"]
+
+# Exclude common paths
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+]
+
+[lint.per-file-ignores]
+# Allow unused imports in __init__.py
+"__init__.py" = ["F401"]
+
+[format]
+# Use double quotes
+quote-style = "double"
+
+# Indent with 4 spaces
+indent-style = "space"
+
+# Use Unix line endings
+line-ending = "lf"

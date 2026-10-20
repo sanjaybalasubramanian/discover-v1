@@ -1,0 +1,78 @@
+roles:
+  - GenAI Engineer
+  - Generative AI Engineer
+  - AI Engineer
+  - Agentic AI Engineer
+  - Machine Learning Engineer
+  - RAG Engineer
+  - Prompt Engineer
+  - LLM Engineer
+  - AI Agents Engineer
+
+
+keywords:
+  primary:
+    - generative AI
+    - GenAI
+    - gen ai
+    - LLM
+    - large language model
+    - agentic AI
+    - AI agents
+    - RAG
+    - retrieval augmented generation
+    - LangChain
+    - LangGraph
+    - prompt engineering
+    
+  secondary:
+    - GPT
+    - Claude
+    - Gemini
+    - transformer
+    - embeddings
+    - vector database
+    - fine-tuning
+    - AI platform
+
+exclusions:
+  - intern
+  - internship
+  - unpaid
+  - 10+ years
+  - 12+ years
+  - senior manager
+  - VP
+  - director
+
+locations:
+  chennai:
+    - Chennai
+    - chennai
+    - madras
+    
+  remote:
+    - remote
+    - Remote
+    - work from home
+    - WFH
+    - wfh
+    - anywhere
+    - Remote - India
+    - Remote (India)
+    - "remote - india"
+    - "remote (india)"
+    
+  exclude_patterns:
+    - Remote - US
+    - Remote (US)
+    - Remote - EU
+    - Remote EU
+    - US only
+    - Europe only
+    - Bengaluru
+    - Bangalore
+    - Mumbai
+    - Delhi
+    - Hyderabad
+    - Pune

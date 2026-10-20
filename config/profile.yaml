@@ -1,0 +1,55 @@
+user:
+  name: Sanjay Ganesh
+  email: sanjayganeshb@gmail.com
+  phone: +91-7871809777
+  location: Chennai, India
+  
+skills:
+  - LangChain
+  - LangGraph
+  - OpenAI API
+  - Claude API
+  - RAG systems
+  - Vector databases
+  - Python
+  - TypeScript
+  - Fast API
+  - Next.js
+  - Prompt engineering
+  - Fine-tuning
+  - Model evaluation
+
+experience_years: 3
+
+preferred_roles:
+  - GenAI Engineer
+  - LLM Engineer
+  - AI Engineer
+  - Agentic AI Developer
+
+education:
+  - B.Tech Computer Science
+  
+resume_variants:
+  default: resume.docx
+  genai: resume_genai.docx
+  agentic: resume_agentic.docx
+  ml: resume_ml.docx
+  
+resume_mapping:
+  genai:
+    - GenAI
+    - Generative AI
+    - GPT
+    - LLM
+  agentic:
+    - Agentic
+    - AI Agents
+    - Agent
+    - Multi-agent
+  ml:
+    - Machine Learning
+    - ML Engineer
+    - Data Science
+
+min_fit_score: 50

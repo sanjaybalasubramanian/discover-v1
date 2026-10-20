@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Job Outreach Pipeline - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <nav class="bg-white shadow-sm border-b">
+        <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">Job Outreach Pipeline</h1>
+                    <p class="text-sm text-gray-500 mt-1">Automated job discovery → research → outreach</p>
+                </div>
+                <div class="flex gap-3">
+                    <a href="/dashboard/companies" class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium">
+                        Companies
+                    </a>
+                    <a href="/dashboard/contacts" class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium">
+                        Contacts
+                    </a>
+                    <button onclick="document.getElementById('runModal').classList.remove('hidden')" 
+                            class="px-6 py-2 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 shadow-sm">
+                        New Run
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-6 py-8">
+        
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <!-- Total Jobs -->
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+                <p class="text-sm font-medium text-gray-500 mb-2">Jobs Discovered</p>
+                <p class="text-3xl font-bold text-gray-900">{{ stats.total_jobs }}</p>
+                <p class="text-xs text-gray-400 mt-1">From all runs</p>
+            </div>
+
+            <!-- Companies Researched -->
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+                <p class="text-sm font-medium text-gray-500 mb-2">Companies Researched</p>
+                <p class="text-3xl font-bold text-gray-900">{{ stats.total_companies }}</p>
+                <p class="text-xs text-green-600 mt-1">{{ stats.companies_completed }} completed</p>
+            </div>
+
+            <!-- Contacts Found -->
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+                <p class="text-sm font-medium text-gray-500 mb-2">Contacts Found</p>
+                <p class="text-3xl font-bold text-gray-900">{{ stats.total_contacts }}</p>
+                <p class="text-xs text-gray-400 mt-1">{{ stats.personal_contacts }} personal · {{ stats.generic_contacts }} generic</p>
+            </div>
+
+            <!-- Success Rate -->
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+                <p class="text-sm font-medium text-gray-500 mb-2">Research Success</p>
+                <p class="text-3xl font-bold text-gray-900">{{ stats.success_rate }}%</p>
+                <p class="text-xs text-gray-400 mt-1">Avg {{ stats.avg_contacts_per_company }} contacts/company</p>
+            </div>
+        </div>
+        
+
+        <!-- Latest Run Status -->
+        {% if latest_run %}
+        <div class="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-6 mb-8 text-white shadow-lg">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold">Latest Run #{{ latest_run.id }}</h3>
+                    <p class="text-indigo-100 text-sm">Started {{ latest_run.started_at.strftime('%b %d at %H:%M') }}</p>
+                </div>
+                <span class="px-4 py-2 rounded-full text-sm font-bold
+                    {% if latest_run.status == 'completed' %}bg-green-400 text-green-900
+                    {% elif latest_run.status == 'running' %}bg-yellow-400 text-yellow-900 animate-pulse
+                    {% elif latest_run.status == 'failed' %}bg-red-400 text-red-900
+                    {% else %}bg-gray-400 text-gray-900{% endif %}">
+                    {{ latest_run.status.upper() }}
+                </span>
+            </div>
+
+            <!-- Pipeline Stages -->
+            <div class="grid grid-cols-3 gap-4 mt-6">
+                <!-- Phase 1 -->
+                <div class="bg-white/10 backdrop-blur rounded-lg p-4">
+                    <p class="text-xs font-semibold text-indigo-200 mb-1">PHASE 1: Discovery</p>
+                    <p class="text-2xl font-bold">{{ latest_run.jobs_found }}</p>
+                    <p class="text-xs text-indigo-200 mt-1">jobs found</p>
+                </div>
+
+                <!-- Phase 2 -->
+                <div class="bg-white/10 backdrop-blur rounded-lg p-4">
+                    <p class="text-xs font-semibold text-indigo-200 mb-1">PHASE 2: Research</p>
+                    <p class="text-2xl font-bold">{{ latest_run.contacts_found or 0 }}</p>
+                    <p class="text-xs text-indigo-200 mt-1">contacts from {{ latest_run.companies_researched or 0 }} companies</p>
+                </div>
+
+                <!-- Phase 3 -->
+                <div class="bg-white/10 backdrop-blur rounded-lg p-4">
+                    <p class="text-xs font-semibold text-indigo-200 mb-1">PHASE 3: Outreach</p>
+                    <p class="text-2xl font-bold">{{ latest_run.emails_sent }}</p>
+                    <p class="text-xs text-indigo-200 mt-1">emails sent</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="bg-white rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4">Run Pipeline</h2>
+            <form method="POST" action="/dashboard/run" class="flex gap-3">
+                <input type="password" name="password" placeholder="Enter password" required
+                       class="flex-1 px-4 py-2 border-2 border-gray-300 rounded focus:border-indigo-500 focus:outline-none">
+                <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-700">
+                    Run Now
+                </button>
+            </form>
+        </div>
+        
+        <div class="bg-white rounded-lg overflow-hidden">
+            <div class="p-6 border-b">
+                <h2 class="text-xl font-bold">Recent Runs</h2>
+            </div>
+            {% if runs %}
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Run</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Time</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
+                        <th class="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Jobs</th>
+                        <th class="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Companies</th>
+                        <th class="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Contacts</th>
+                        <th class="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Sent</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for run in runs %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 font-bold">#{{ run.id }}</td>
+                        <td class="px-6 py-4 text-sm">
+                            {{ run.started_at.strftime('%b %d, %H:%M') }}
+                            {% if run.completed_at %}
+                            <br><span class="text-xs text-gray-400">({{ ((run.completed_at - run.started_at).total_seconds() / 60) | round(1) }}m)</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="px-3 py-1 rounded-full text-xs font-semibold
+                                {% if run.status == 'completed' %}bg-green-100 text-green-800
+                                {% elif run.status == 'running' %}bg-yellow-100 text-yellow-800
+                                {% elif run.status == 'failed' %}bg-red-100 text-red-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ run.status.upper() }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-center font-semibold">{{ run.jobs_found }}</td>
+                        <td class="px-6 py-4 text-center font-semibold">{{ run.companies_researched or 0 }}</td>
+                        <td class="px-6 py-4 text-center">
+                            <span class="font-semibold">{{ run.contacts_found or 0 }}</span>
+                            {% if run.personal_contacts_found %}
+                            <br><span class="text-xs text-green-600">{{ run.personal_contacts_found }} personal</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-center font-semibold">{{ run.emails_sent }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="text-center py-12">
+                <p class="text-gray-500">No runs yet. Click "Run Now" to start!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

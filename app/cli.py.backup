@@ -1,0 +1,179 @@
+"""
+CLI entrypoint for 3-phase pipeline execution
+"""
+import asyncio
+import sys
+import time
+from datetime import datetime
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import Run, Company, Job
+from app.models.contact import Contact
+
+
+async def run_phase1_discovery(run_id: int, db: Session):
+    """Phase 1: Job Discovery"""
+    from app.pipeline.runner import run_pipeline
+    
+    print("\n" + "=" * 60)
+    print("PHASE 1: JOB DISCOVERY")
+    print("=" * 60)
+    
+    start = time.time()
+    result = await run_pipeline(run_id, db)
+    elapsed = time.time() - start
+    
+    print(f"✓ Completed in {elapsed:.1f}s")
+    print(f"  Jobs found: {result['jobs_found']}")
+    print(f"  Companies discovered: {db.query(Company).filter(Company.research_status=='pending').count()}")
+    
+    return result
+
+
+async def run_phase2_research(run_id: int, db: Session, limit: int = 25):
+    """Phase 2: Research Contacts"""
+    from app.research.agent import research_company_contacts
+    
+    print("\n" + "=" * 60)
+    print("PHASE 2: CONTACT RESEARCH")
+    print("=" * 60)
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    run.phase = 'research'
+    db.commit()
+    
+    companies = db.query(Company).filter(
+        Company.research_status == 'pending'
+    ).limit(limit).all()
+    
+    print(f"Researching {len(companies)} companies...")
+    
+    start = time.time()
+    results = []
+    
+    for i, company in enumerate(companies, 1):
+        print(f"\n[{i}/{len(companies)}] {company.name}")
+        result = await research_company_contacts(company.name, db)
+        results.append(result)
+        
+        if result['success']:
+            print(f"  ✓ Found {result['total_contacts']} contacts ({len(result['personal_contacts'])} personal)")
+    
+    elapsed = time.time() - start
+    
+    total_contacts = sum(r['total_contacts'] for r in results)
+    personal_contacts = sum(len(r['personal_contacts']) for r in results)
+    
+    run.companies_researched = len(companies)
+    run.contacts_found = total_contacts
+    run.personal_contacts_found = personal_contacts
+    db.commit()
+    
+    print(f"\n✓ Completed in {elapsed:.1f}s")
+    print(f"  Companies researched: {len(companies)}")
+    print(f"  Contacts found: {total_contacts} ({personal_contacts} personal)")
+    
+    return results
+
+
+async def run_phase3_outreach(run_id: int, db: Session, limit: int = 25):
+    """Phase 3: Send Outreach Emails"""
+    print("\n" + "=" * 60)
+    print("PHASE 3: OUTREACH")
+    print("=" * 60)
+    print("NOTE: Outreach not implemented yet")
+    print("      Contacts are ready in database")
+    
+    run = db.query(Run).filter(Run.id == run_id).first()
+    run.phase = 'outreach'
+    db.commit()
+    
+    # TODO: Implement email sending
+    return {'sent': 0}
+
+
+async def run_command():
+    """Execute full 3-phase pipeline"""
+    
+    print("=" * 60)
+    print("🚀 3-PHASE JOB OUTREACH PIPELINE")
+    print("=" * 60)
+    
+    db: Session = SessionLocal()
+    
+    try:
+        # Create run
+        run = Run(status='running', phase='discovery')
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        
+        print(f"\n📊 Run ID: {run.id}")
+        print(f"⏰ Started: {run.started_at}")
+        
+        # Phase 1: Discovery
+        phase1 = await run_phase1_discovery(run.id, db)
+        
+        # Phase 2: Research
+        phase2 = await run_phase2_research(run.id, db, limit=10)  # Start with 10 companies
+        
+        # Phase 3: Outreach
+        phase3 = await run_phase3_outreach(run.id, db, limit=25)
+        
+        # Complete
+        run.status = 'completed'
+        run.completed_at = datetime.now()
+        db.commit()
+        
+        print("\n" + "=" * 60)
+        print("✅ PIPELINE COMPLETED")
+        print("=" * 60)
+        print(f"Phase 1: {phase1['jobs_found']} jobs discovered")
+        print(f"Phase 2: {run.companies_researched} companies researched")
+        print(f"         {run.contacts_found} contacts found ({run.personal_contacts_found} personal)")
+        print(f"Phase 3: {phase3['sent']} emails sent (TODO)")
+        print()
+        
+        return 0
+        
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("❌ PIPELINE FAILED")
+        print("=" * 60)
+        print(f"Error: {e}")
+        
+        import traceback
+        traceback.print_exc()
+        
+        if 'run' in locals():
+            run.status = 'failed'
+            run.error_message = str(e)
+            run.completed_at = datetime.now()
+            db.commit()
+        
+        return 1
+        
+    finally:
+        db.close()
+
+def main():
+    """Main CLI entry point"""
+    
+    if len(sys.argv) < 2:
+        print("Usage: python -m app.cli <command>")
+        print()
+        print("Commands:")
+        print("  run    - Execute the outreach pipeline")
+        sys.exit(1)
+    
+    command = sys.argv[1]
+    
+    if command == 'run':
+        exit_code = asyncio.run(run_command())
+        sys.exit(exit_code)
+    else:
+        print(f"Unknown command: {command}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

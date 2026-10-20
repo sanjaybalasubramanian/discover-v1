@@ -1,0 +1,33 @@
+﻿# CRITICAL ISSUES FOUND
+
+## 1. KeyError: contacts
+- Agent returned wrong format
+- Missing contacts key in result dict
+
+## 2. chris@morningai.com classified as FALLBACK not PERSONAL
+- WRONG: Should be personal (person email)
+- Classification logic broken
+
+## 3. Duplicate URL fetches
+- morningai.com/about fetched 3 TIMES
+- Wasted ~2.5 seconds
+
+## 4. RocketReach ALWAYS blocked
+- Agent tries every time
+- Always fails with 403
+- Need to blacklist
+
+## 5. Two different companies?
+- moring.ai (without AI)
+- morningai.com (with AI)
+- Agent confused between them
+
+## 6. Only saved 1 of 4+ emails found
+- Found: chris@, demo@, apply@, careers@
+- Saved: Only chris@
+- Why not save fallbacks?
+
+## INEFFICIENCIES:
+- 15+ searches, many = 0 results
+- Timeout too short (60s)
+- Search query truncated: recruiterOR

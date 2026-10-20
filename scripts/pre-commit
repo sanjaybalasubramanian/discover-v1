@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+"""
+Git pre-commit hook - runs linting before allowing commit
+Install: python scripts/install_hooks.py
+"""
+import sys
+import subprocess
+
+def main():
+    print("🔍 Running pre-commit checks...")
+    
+    # Run ruff
+    result = subprocess.run(
+        ["ruff", "check", "app/", "--select", "F,E", "--ignore", "E501"],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        print("❌ Linting errors found:")
+        print(result.stdout)
+        print("\nFix errors with: ruff check app/ --fix")
+        return 1
+    
+    print("✅ All checks passed")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,46 @@
+﻿# YOUR ANALYSIS - 100% CORRECT!
+
+## 2. Agent Should Classify (You are Right!)
+CURRENT: Backend classifies after agent saves
+PROBLEM: chris@ classified as fallback (WRONG!)
+SOLUTION: Add is_generic parameter to save tool
+
+## 3. Duplicate Fetches (Fix Required!)
+morningai.com/about fetched 3 TIMES
+SOLUTION: Add URL cache in fetch tool
+
+## 4. RocketReach Blocked (Stealth Not Working)
+HTTP 403 EVERY time - cant bypass
+SOLUTION: Blacklist in prompt, dont try
+
+## 5&6. Only 1 Contact Saved (Correct Behavior)
+moring.ai != morningai.com (different companies)
+Agent correctly rejected wrong domain
+
+---
+
+## MODEL vs PROMPT?
+
+YOUR QUESTION: Change model or tune prompt?
+
+ANSWER: TUNE PROMPT FIRST! 🎯
+
+WHY:
+- Agent IS finding contacts (works!)
+- Issues are: duplicates, classification, efficiency
+- Haiku is fast enough (60s can go to 120s)
+- Sonnet wont fix tool/prompt issues
+
+TRY PROMPT FIXES FIRST, then consider Sonnet if still slow
+
+---
+
+## 5 FIXES:
+
+1. ADD is_generic param to save_discovered_contacts
+2. ADD URL cache (prevent duplicates)
+3. BLACKLIST rocketreach/crunchbase in prompt
+4. OPTIMIZE search strategy (smarter queries)
+5. MAKE AGENT OPTIMISTIC (stop after 3-5 contacts)
+
+Want me to implement? 🚀

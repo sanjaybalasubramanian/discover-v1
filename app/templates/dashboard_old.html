@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Job Outreach Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-purple-600 to-blue-600 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="bg-white rounded-lg shadow-xl p-6 mb-6">
+            <h1 class="text-3xl font-bold">🎯 Job Outreach Dashboard</h1>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Total Jobs</p>
+                <p class="text-4xl font-bold">{{ stats.total_jobs }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Contacts</p>
+                <p class="text-4xl font-bold">{{ stats.total_contacts }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Emails Sent</p>
+                <p class="text-4xl font-bold">{{ stats.total_sent }}</p>
+            </div>
+            <div class="bg-white rounded-lg p-6">
+                <p class="text-gray-500 text-sm font-semibold uppercase">Open Rate</p>
+                <p class="text-4xl font-bold">{{ stats.open_rate }}%</p>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4">🚀 Run Pipeline</h2>
+            <form method="POST" action="/dashboard/run" class="flex gap-3">
+                <input type="password" name="password" placeholder="Enter password" required
+                       class="flex-1 px-4 py-2 border-2 border-gray-300 rounded focus:border-indigo-500 focus:outline-none">
+                <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-700">
+                    Run Now
+                </button>
+            </form>
+        </div>
+        
+        <div class="bg-white rounded-lg overflow-hidden">
+            <div class="p-6 border-b">
+                <h2 class="text-xl font-bold">📊 Recent Runs</h2>
+            </div>
+            {% if runs %}
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">ID</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Started</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Jobs</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Emails</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for run in runs %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 font-bold">#{{ run.id }}</td>
+                        <td class="px-6 py-4 text-sm">{{ run.started_at.strftime('%b %d, %H:%M') }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-3 py-1 rounded-full text-xs font-semibold
+                                {% if run.status == 'completed' %}bg-green-100 text-green-800
+                                {% elif run.status == 'running' %}bg-yellow-100 text-yellow-800
+                                {% elif run.status == 'failed' %}bg-red-100 text-red-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ run.status.upper() }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">{{ run.jobs_found }}</td>
+                        <td class="px-6 py-4">{{ run.emails_sent }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="text-center py-12">
+                <p class="text-gray-500">No runs yet. Click "Run Now" to start!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
