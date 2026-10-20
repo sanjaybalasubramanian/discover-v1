@@ -1,0 +1,52 @@
+================================================================================
+🚀 VERCEL DEPLOYMENT - READY TO GO!
+================================================================================
+
+STEP-BY-STEP GUIDE:
+
+1. Go to: https://vercel.com
+   
+2. Click: "Sign Up" (or "Sign In" if you have account)
+   
+3. Choose: "Continue with GitHub"
+   
+4. After login → Click: "Add New..." → "Project"
+   
+5. Find and click: "sanjaybalasubramanian/discover-v1"
+   
+6. Click: "Import"
+   
+7. BEFORE deploying → Add Environment Variable:
+   - Click "Environment Variables" dropdown
+   - Name: DATABASE_URL
+   - Value: postgresql://postgres.twwvyllmqjzrqmsnamhq:SanjaySupabase7*@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+   - Select: Production ✓, Preview ✓, Development ✓
+   - Click: "Add"
+   
+8. Click: "Deploy" button
+   
+9. Wait 1-2 minutes...
+   
+10. Done! Copy your URL (e.g., https://discover-v1.vercel.app)
+
+
+AFTER DEPLOYMENT:
+
+Test it:
+  python test_vercel_deployment.py https://your-url.vercel.app
+
+Update .env:
+  APP_URL=https://your-url.vercel.app/
+
+Send test email:
+  python send_test_email.py
+
+Check tracking:
+  python check_tracking.py
+
+✅ Tracking will work automatically in Gmail!
+
+
+Full guide: VERCEL_WEB_DEPLOYMENT.txt
+
+================================================================================
