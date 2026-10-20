@@ -113,7 +113,8 @@ async def track_open(outreach_id: int, request: Request):
         }
     )
 
-# Vercel handler
-def handler(request):
-    """Vercel serverless function handler"""
-    return app(request)
+# Vercel handler - expose the FastAPI app directly
+# Vercel will automatically handle requests through ASGI
+from mangum import Mangum
+
+handler = Mangum(app)
