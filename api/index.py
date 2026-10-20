@@ -14,10 +14,12 @@ from sqlalchemy.sql import func
 # Initialize FastAPI
 app = FastAPI()
 
-# Database setup
+# Database setup - Force psycopg2 dialect
 DATABASE_URL = os.getenv('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
-    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql+psycopg2://', 1)
+elif DATABASE_URL and not DATABASE_URL.startswith('postgresql+psycopg2://'):
+    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg2://', 1)
 
 Base = declarative_base()
 
@@ -31,11 +33,8 @@ class EmailOutreach(Base):
     opened_at = Column(DateTime)
     created_at = Column(DateTime, server_default=func.now())
 
-# Create engine and session with psycopg2
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"sslmode": "require"}  # Force psycopg2
-) if DATABASE_URL else None
+# Create engine and session
+engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine) if engine else None
 
 # 1x1 transparent tracking pixel (GIF)
